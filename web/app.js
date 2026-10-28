@@ -1,62 +1,95 @@
 /*
  * Planning poker client.
  *
- * Data flow:
- *   - Every player signs in anonymously, so the database knows who they are.
- *   - All writes are calls to database functions (join_room, cast_vote, ...).
- *   - Room and player changes arrive over Supabase Realtime.
- *   - Votes are fetched only after the reveal. Before that, the database
- *     refuses to send anyone else's card, so they can't be peeked at.
- *   - Realtime presence tells us who still has the page open, and realtime
- *     broadcast carries the throwaway stuff: emoji reactions and nudges.
+ *   - Players sign in anonymously, so the database knows who they are.
+ *   - Every write is a database function call (create_room, join_game,
+ *     cast_vote, ...). Room and player changes arrive over Supabase Realtime.
+ *   - Votes are fetched only after the reveal; before that the database
+ *     refuses to send anyone else's card.
+ *   - Realtime presence says who has the page open and whether it's visible.
+ *     Broadcast carries reactions and nudges.
  */
 (function () {
   'use strict';
 
-  // ---------- basics ----------
-  var $ = function (s) { return document.querySelector(s); };
+  // ---------- constants ----------
   var DECKS = {
-    fib:    { label: 'Fibonacci',          cards: ['0', '½', '1', '2', '3', '5', '8', '13', '21', '34', '?', '☕'] },
-    mfib:   { label: 'Modified Fibonacci', cards: ['0', '½', '1', '2', '3', '5', '8', '13', '20', '40', '100', '?', '☕'] },
-    tshirt: { label: 'T-shirt sizes',      cards: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '?', '☕'] },
-    pow2:   { label: 'Powers of 2',        cards: ['0', '1', '2', '4', '8', '16', '32', '64', '?', '☕'] }
+    fib:    { label: 'Fibonacci',   cards: ['0', '½', '1', '2', '3', '5', '8', '13', '21', '34', '?', '☕'] },
+    mfib:   { label: 'Modified',    cards: ['0', '½', '1', '2', '3', '5', '8', '13', '20', '40', '100', '?', '☕'] },
+    tshirt: { label: 'T-shirt',     cards: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '?', '☕'] },
+    pow2:   { label: 'Powers of 2', cards: ['0', '1', '2', '4', '8', '16', '32', '64', '?', '☕'] }
   };
   var SPECIAL = { '?': 1, '☕': 1 };
   var REACTS = [['👍', 'Thumbs up'], ['😂', 'Laughing'], ['🤔', 'Hmm'], ['😱', 'Yikes'], ['🎉', 'Celebrate']];
   var POKE = '👋';
   var ROOM_RE = /^[a-z0-9][a-z0-9-]{1,47}$/;
+  var KEY_RE = /^([A-Z][A-Z0-9]{1,9}-\d{1,7})(?=$|[\s:.,\-–—])[\s:.,\-–—]*/;
+  var KEY_ONLY = /^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/;
+  var GRACE = 2 * 60 * 1000;
   var ADJ = ['brisk', 'calm', 'clever', 'eager', 'fuzzy', 'gentle', 'jolly', 'lucky', 'mellow', 'nimble', 'plucky', 'quiet', 'rapid', 'sunny', 'tidy', 'witty'];
   var NOUN = ['heron', 'otter', 'badger', 'falcon', 'lynx', 'marten', 'osprey', 'panda', 'quokka', 'raven', 'tapir', 'walrus', 'yak', 'zebra', 'gecko', 'bison'];
+  var LIB_XLSX = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  var LIB_QR = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
 
-  var Theme = window.PokerTheme || {
-    brand: { appName: 'Planning poker', orgName: '', logo: null, logoDark: null, logoAlt: '' },
-    themes: function () { return []; }, theme: function () { return ''; }, mode: function () { return 'auto'; },
-    resolvedMode: function () { return 'light'; }, setTheme: function () {}, setMode: function () {}, onChange: function () {}
+  var ICON = {
+    down: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>',
+    up: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>',
+    moon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+    off: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.7"/><path d="M19 12.9a10 10 0 0 0-2.1-1.4"/><path d="M2 8.8a15 15 0 0 1 4.2-2.6"/><path d="M22 8.8a15 15 0 0 0-11.3-3.7"/><path d="M12 20h.01"/></svg>',
+    eye: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    cup: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 3v3"/><path d="M12 3v3"/></svg>',
+    cupSmall: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17"/></svg>',
+    reveal: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    timer: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/></svg>',
+    again: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 14.9 3.9l1.1-1.4"/><path d="M20 20v-4.5h-4.5"/></svg>',
+    tick: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+    x: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>',
+    plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
+    download: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>',
+    sheet: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M9 4v16"/></svg>',
+    bolt: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>',
+    hide: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4"/><path d="M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'
   };
-  var brand = Theme.brand;
 
+  // ---------- basics ----------
+  var $ = function (s) { return document.querySelector(s); };
   var store = {
     get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   };
   function clip(v, n) {
     if (typeof v !== 'string') return '';
-    var s = v.replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b\u200c\u200e\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, '');
-    s = Array.from(s);
-    return (s.length > n ? s.slice(0, n - 1).join('') + '…' : s.join('')).trim();
+    var s = Array.from(v.replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b\u200c\u200e\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim());
+    return s.length > n ? s.slice(0, n - 1).join('') + '…' : s.join('');
   }
   function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
   function newCode() { return pick(ADJ) + '-' + pick(NOUN) + '-' + (10 + Math.floor(Math.random() * 90)); }
   function cleanCode(v) {
     return String(v || '').trim().toLowerCase().replace(/[\s_.]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+/, '').slice(0, 48);
   }
+  function codeFrom(input) {
+    var s = String(input || '').trim();
+    var i = s.indexOf('#');
+    if (i >= 0) s = s.slice(i + 1);
+    else if (/^https?:\/\//i.test(s)) s = '';
+    try { s = decodeURIComponent(s); } catch (e) {}
+    return cleanCode(s);
+  }
   function num(v) { return v === '½' ? 0.5 : (/^\d+$/.test(v) ? Number(v) : null); }
   function fmt(n) { return String(Math.round(n * 10) / 10); }
   function len(v) { return Array.from(v).length; }
-  function fine() { return window.matchMedia && matchMedia('(pointer: fine)').matches; }
   function calm() { return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }
   function mmss(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
   function dur(sec) { if (typeof sec !== 'number') return ''; return sec < 60 ? sec + ' s' : Math.round(sec / 60) + ' min'; }
+  function norm(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function splitKey(story) {
+    var s = String(story || '');
+    var m = s.match(KEY_RE);
+    if (!m) return { key: '', title: s };
+    var rest = s.slice(m[0].length).trim();
+    return { key: m[1], title: rest };
+  }
 
   function h(tag, attrs) {
     var el = document.createElement(tag);
@@ -64,6 +97,7 @@
       var v = attrs[k];
       if (v == null || v === false) return;
       if (k === 'class') el.className = v;
+      else if (k === 'html') el.innerHTML = v;
       else if (k.slice(0, 2) === 'on') el[k] = v;
       else el.setAttribute(k, v === true ? '' : v);
     });
@@ -74,6 +108,7 @@
     }
     return el;
   }
+  function svg(markup) { var t = document.createElement('template'); t.innerHTML = markup; return t.content.firstChild; }
 
   var toastTimer;
   function toast(msg) {
@@ -81,12 +116,12 @@
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2400);
   }
   var lastLive = '';
   function announce(msg) { if (msg !== lastLive) { lastLive = msg; $('#live').textContent = msg; } }
 
-  function copyText(text, okMsg, failMsg) {
+  function copyText(text, okMsg) {
     function fallback() {
       var ta = document.createElement('textarea');
       ta.value = text; ta.setAttribute('readonly', '');
@@ -95,29 +130,48 @@
       var ok = false;
       try { ok = document.execCommand('copy'); } catch (e) {}
       ta.remove();
-      toast(ok ? okMsg : failMsg);
+      toast(ok ? okMsg : 'Couldn’t copy');
     }
     try { navigator.clipboard.writeText(text).then(function () { toast(okMsg); }, fallback); }
     catch (e) { fallback(); }
   }
+  function download(name, text, type) {
+    try {
+      var blob = new Blob([text], { type: type || 'text/plain' });
+      var url = URL.createObjectURL(blob);
+      var a = h('a', { href: url, download: name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { toast('Couldn’t download'); }
+  }
+  var libs = {};
+  function loadScript(src) {
+    if (!libs[src]) libs[src] = new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = src; s.async = true; s.onload = res; s.onerror = function () { delete libs[src]; rej(new Error('load')); };
+      document.head.append(s);
+    });
+    return libs[src];
+  }
 
   function friendly(e) {
     var m = (e && e.message) || '';
-    if (e && e.code === 'PGRST202') return 'The database isn’t set up yet. Run the SQL files in supabase/migrations, in order, in the Supabase SQL editor.';
-    if (/anonymous sign-ins are disabled/i.test(m)) return 'Anonymous sign-ins are turned off for this Supabase project. Turn them on under Authentication, then Sign In / Providers.';
-    if (/failed to fetch|networkerror|load failed/i.test(m)) return 'Can’t reach the database. Check your connection and try again.';
-    if (/rate limit/i.test(m)) return 'Too many sign-ins from this network right now. Wait a few minutes and try again.';
-    return m || 'Something went wrong. Try again.';
+    var c = e && e.code;
+    if (c === 'PGRST202') return 'The database needs an update. See the README.';
+    if (c === 'P0002' || /no game with that code/i.test(m)) return 'No game with that code';
+    if (/anonymous sign-ins are disabled/i.test(m)) return 'Anonymous sign-ins are off in Supabase';
+    if (/failed to fetch|networkerror|load failed/i.test(m)) return 'Can’t reach the server. Check your connection.';
+    if (/rate limit/i.test(m)) return 'Too many sign-ins from this network. Try again soon.';
+    return m || 'Something went wrong';
   }
 
   // ---------- Supabase ----------
+  var Theme = window.PokerTheme || { brand: { appName: 'Planning poker' }, themes: function () { return []; }, theme: function () { return ''; }, mode: function () { return 'auto'; }, resolvedMode: function () { return 'light'; }, setTheme: function () {}, setMode: function () {}, onChange: function () {} };
+  var brand = Theme.brand;
   var cfg = window.POKER_CONFIG || {};
   var configured = typeof cfg.supabaseUrl === 'string' && /^https?:\/\//.test(cfg.supabaseUrl) &&
-    typeof cfg.supabaseAnonKey === 'string' && cfg.supabaseAnonKey.length > 20 &&
-    !/YOUR[-_]/i.test(cfg.supabaseUrl + cfg.supabaseAnonKey);
-  var sb = (configured && window.supabase && window.supabase.createClient)
-    ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey)
-    : null;
+    typeof cfg.supabaseAnonKey === 'string' && cfg.supabaseAnonKey.length > 20 && !/YOUR[-_]/i.test(cfg.supabaseUrl + cfg.supabaseAnonKey);
+  var sb = (configured && window.supabase && window.supabase.createClient) ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey) : null;
 
   async function ensureUser() {
     var got = await sb.auth.getSession();
@@ -128,33 +182,37 @@
       session = res.data.session;
     }
     if (sb.realtime && typeof sb.realtime.setAuth === 'function') sb.realtime.setAuth(session.access_token);
+    uid = session.user.id;
     return session.user;
   }
 
   // ---------- state ----------
   var uid = null, code = '', room = null;
-  var players = new Map();   // user_id -> { name, spectator, voted_round }
-  var online = null;         // Set of user_ids with the page open; null until presence syncs
+  var players = new Map();
+  var online = null;               // Map user_id -> visible (true/false); null until presence syncs
+  var offlineSince = new Map();    // user_id -> ms when they dropped out of presence
   var votes = new Map(), votesRound = -1, votesLoaded = -1, votesReq = 0;
   var hist = [], histVersion = -1, histReq = 0;
   var queue = [], queueVersion = -1, queueReq = 0;
   var myVote = null, votePending = 0;
   var me = { name: '', spec: false };
-  var channel = null, onTable = false, sess = 0;
-  var spreadMemo = {}, seenUnrevealed = -1, confettiRound = -1;
-  var autoKey = '', autoTimer = null, lastSend = 0, lastHeard = {};
+  var channel = null, channelReady = false, onTable = false, sess = 0, connState = 'idle';
+  var seenUnrevealed = -1, confettiRound = -1, autoKey = '', autoTimer = null, lastSend = 0, lastHeard = {};
+  var newOpts = { deck: 'fib', auto: true, anon: false };
+  var drafts = [];                 // stories collected before a new game exists
+  var storiesDraftMode = false;
+  var pending = null;              // parsed import awaiting confirmation
 
   function applyRoom(r) {
     if (!r || r.code !== code) return;
-    if (room && typeof r.version === 'number' && r.version < room.version) return; // stale
+    if (room && typeof r.version === 'number' && r.version < room.version) return;
     var prev = room;
     room = {
-      code: r.code, round: r.round, revealed: !!r.revealed, story: r.story || '',
+      code: r.code, title: r.title || '', round: r.round, revealed: !!r.revealed, story: r.story || '',
       deck: DECKS[r.deck] ? r.deck : 'fib', final: r.final || null,
       hist_version: r.hist_version || 0, queue_version: r.queue_version || 0, version: r.version || 0,
       auto_reveal: !!r.auto_reveal, anonymous: !!r.anonymous,
-      timer_ends_at: r.timer_ends_at ? Date.parse(r.timer_ends_at) : null,
-      story_rounds: r.story_rounds || 1
+      timer_ends_at: r.timer_ends_at ? Date.parse(r.timer_ends_at) : null, story_rounds: r.story_rounds || 1
     };
     if (!prev || prev.round !== room.round) {
       votes = new Map(); votesRound = -1; votesLoaded = -1;
@@ -193,7 +251,7 @@
       .order('created_at', { ascending: true }).order('id', { ascending: true }).limit(500);
     if (req !== histReq || res.error) return;
     hist = res.data; histVersion = want;
-    render();
+    render(); renderStories();
   }
   async function loadQueue() {
     var want = room ? room.queue_version : 0, req = ++queueReq;
@@ -201,7 +259,7 @@
       .order('position', { ascending: true }).order('id', { ascending: true }).limit(200);
     if (req !== queueReq || res.error) return;
     queue = res.data; queueVersion = want;
-    render(); renderQueueDlg();
+    render(); renderStories();
   }
   async function loadMyVote() {
     if (!room || votePending) return;
@@ -213,7 +271,25 @@
   }
   function resync() { loadRoom(); loadPlayers(); loadMyVote(); }
 
+  // ---------- realtime ----------
+  function trackMe() {
+    if (channel && channelReady) channel.track({ v: document.visibilityState === 'hidden' ? 0 : 1 });
+  }
+  function syncPresence() {
+    var st = channel.presenceState();
+    var now = Date.now();
+    var next = new Map();
+    Object.keys(st).forEach(function (k) {
+      var metas = st[k] || [];
+      next.set(k, metas.some(function (m) { return !m || m.v !== 0; }));
+    });
+    if (online) online.forEach(function (_, k) { if (!next.has(k)) offlineSince.set(k, now); });
+    next.forEach(function (_, k) { offlineSince.delete(k); });
+    online = next;
+    render();
+  }
   function subscribe(my) {
+    channelReady = false;
     channel = sb.channel('poker-' + code, { config: { presence: { key: uid }, broadcast: { self: false } } });
     channel
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: 'code=eq.' + code }, function (p) {
@@ -224,31 +300,23 @@
         if (my !== sess || !p.new || !p.new.user_id) return;
         players.set(p.new.user_id, p.new); render();
       })
-      .on('presence', { event: 'sync' }, function () {
-        if (my !== sess) return;
-        online = new Set(Object.keys(channel.presenceState()));
-        render();
-      })
-      .on('broadcast', { event: 'react' }, function (msg) {
-        if (my !== sess) return;
-        heard(msg && msg.payload);
-      })
+      .on('presence', { event: 'sync' }, function () { if (my === sess) syncPresence(); })
+      .on('broadcast', { event: 'react' }, function (msg) { if (my === sess) heard(msg && msg.payload); })
       .subscribe(function (status) {
         if (my !== sess) return;
-        if (status === 'SUBSCRIBED') { setConn('live'); channel.track({ at: Date.now() }); resync(); }
+        if (status === 'SUBSCRIBED') { channelReady = true; setConn('live'); trackMe(); resync(); }
         else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConn('connecting');
         else if (status === 'CLOSED') setConn('offline');
       });
   }
-
   function setConn(s) {
-    var c = $('#conn');
-    c.className = 'conn ' + s;
-    c.textContent = { live: 'Live', connecting: 'Connecting…', offline: 'Offline', idle: '' }[s] || '';
-    c.hidden = s === 'idle';
+    connState = s;
+    var d = $('#connDot');
+    d.className = 'dot' + (s === 'live' ? ' live' : s === 'offline' ? ' offline' : '');
+    $('#roomPill').setAttribute('aria-label', (s === 'live' ? 'Live' : s === 'offline' ? 'Offline' : 'Connecting') + '. Invite');
     var b = $('#banner');
-    var msg = s === 'offline' ? 'You’re disconnected from the table. Reload the page to rejoin.' : '';
-    b.textContent = msg; b.hidden = !msg;
+    b.textContent = s === 'offline' ? 'Disconnected. Reload to rejoin.' : '';
+    b.hidden = s !== 'offline';
   }
 
   // ---------- calls ----------
@@ -275,18 +343,28 @@
     rpc('start_round', { p_save: true, p_estimate: v }).then(function (r) {
       if (!r) return;
       useRoom(r);
-      toast('Saved with an estimate of ' + v);
-      if (fine()) $('#story').focus();
+      toast('Saved: ' + v);
     });
   }
+  function toggleTimer() {
+    var running = room.timer_ends_at && room.timer_ends_at > Date.now();
+    rpc('start_timer', { p_seconds: running ? 0 : 120 }).then(useRoom);
+  }
+  async function queueStories(list) {
+    var added = 0;
+    for (var i = 0; i < list.length; i += 50) {
+      var r = await rpc('queue_add', { p_stories: list.slice(i, i + 50) });
+      if (!r) break;
+      useRoom(r);
+      added += Math.min(50, list.length - i);
+    }
+    return added;
+  }
 
-  // Auto-reveal: once every present voter is ready, the first voter's
-  // browser (by id) flips after a beat. Others wait longer as a backup.
-  // The database ignores a second reveal, so a race is harmless.
   function clearAuto() { if (autoTimer) clearTimeout(autoTimer); autoTimer = null; autoKey = ''; }
   function maybeAutoReveal(list) {
     if (!room.auto_reveal || room.revealed) { clearAuto(); return; }
-    var voters = list.filter(function (p) { return !p.spec && !p.away; });
+    var voters = list.filter(function (p) { return !p.spec && p.presence !== 'off'; });
     if (voters.length < 2 || !voters.every(function (p) { return p.ready; })) { clearAuto(); return; }
     var key = room.round + '|' + voters.map(function (p) { return p.peer; }).join(',');
     if (key === autoKey && autoTimer) return;
@@ -302,6 +380,7 @@
   }
 
   // ---------- reactions & nudges ----------
+  var seatEls = new Map();
   function floatAt(peer, emoji) {
     if (calm()) return;
     var el = seatEls.get(peer);
@@ -320,7 +399,7 @@
     channel.send({ type: 'broadcast', event: 'react', payload: { from: uid, emoji: emoji, to: to || null } });
     return true;
   }
-  function react(emoji) { if (send(emoji)) floatAt(uid, emoji); }
+  function react(emoji) { if (send(emoji)) floatAt(uid, emoji); closeTray(); }
   function poke(peer) {
     var p = players.get(peer);
     if (!p || peer === uid) return;
@@ -340,16 +419,14 @@
         var hand = $('#hand');
         hand.classList.remove('nudged'); void hand.offsetWidth; hand.classList.add('nudged');
         setTimeout(function () { hand.classList.remove('nudged'); }, 1100);
-        toast(who + ' nudged you' + (myVote || me.spec || room.revealed ? '' : '. Your turn to pick a card.'));
+        toast(who + ' nudged you');
       }
-    } else {
-      floatAt(p.from, p.emoji);
-    }
+    } else floatAt(p.from, p.emoji);
   }
   function confetti() {
     if (calm()) return;
     var box = h('div', { class: 'confetti', 'aria-hidden': 'true' });
-    var colors = ['var(--accent)', 'var(--card-red)', 'var(--felt)', 'var(--card)', 'var(--felt-ink)'];
+    var colors = ['var(--accent)', 'var(--card-red)', 'var(--table)', 'var(--card)', 'var(--rail)'];
     for (var i = 0; i < 32; i++) {
       var bit = h('i');
       bit.style.left = (Math.random() * 100) + '%';
@@ -365,22 +442,26 @@
 
   // ---------- players & scoring ----------
   function seatList() {
-    var out = [];
+    var out = [], now = Date.now();
     players.forEach(function (p, id) {
       var isMe = id === uid;
-      var here = isMe || !online || online.has(id);
+      var presence;
+      if (isMe || !online) presence = 'live';
+      else if (online.has(id)) presence = online.get(id) ? 'live' : 'away';
+      else if (offlineSince.has(id) && now - offlineSince.get(id) < GRACE) presence = 'off';
       var spec = isMe ? me.spec : !!p.spectator;
       var v = (room.revealed && !spec) ? (votes.get(id) || null) : null;
-      if (!here && !v) return;
+      var ready = !spec && (isMe ? !!myVote : p.voted_round === room.round);
+      if (!presence) {
+        if (v || (ready && !room.revealed)) presence = 'off';
+        else return;
+      }
       var name = isMe ? me.name : (clip(p.name, 24) || 'Someone');
-      out.push({
-        peer: id, isMe: isMe, away: !here, spec: spec, v: v, nick: name, name: name,
-        ready: !spec && (isMe ? !!myVote : p.voted_round === room.round)
-      });
+      out.push({ peer: id, isMe: isMe, spec: spec, v: v, ready: ready, presence: presence, name: name });
     });
-    if (uid && !players.has(uid)) out.push({ peer: uid, isMe: true, away: false, spec: me.spec, v: null, nick: me.name, name: me.name, ready: !me.spec && !!myVote });
+    if (uid && !players.has(uid)) out.push({ peer: uid, isMe: true, spec: me.spec, v: null, ready: !me.spec && !!myVote, presence: 'live', name: me.name });
     out.sort(function (a, b) {
-      return ((a.spec ? 1 : 0) - (b.spec ? 1 : 0)) || a.nick.toLowerCase().localeCompare(b.nick.toLowerCase()) || (a.peer < b.peer ? -1 : 1);
+      return ((a.spec ? 1 : 0) - (b.spec ? 1 : 0)) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || (a.peer < b.peer ? -1 : 1);
     });
     return out;
   }
@@ -393,13 +474,7 @@
     var real = list.filter(function (x) { return !SPECIAL[x.v]; });
     var distinct = {};
     real.forEach(function (x) { distinct[x.v] = 1; });
-    var res = {
-      dist: dist, avg: null, suggestion: null, lo: null, hi: null, total: list.length,
-      consensus: real.length > 0 && Object.keys(distinct).length === 1,
-      realCount: real.length,
-      unsure: list.filter(function (x) { return x.v === '?'; }).length,
-      breaks: list.filter(function (x) { return x.v === '☕'; }).length
-    };
+    var res = { dist: dist, avg: null, suggestion: null, lo: null, hi: null, realCount: real.length, consensus: real.length > 0 && Object.keys(distinct).length === 1 };
     if (!real.length) return res;
     var rank;
     if (deck !== 'tshirt') {
@@ -410,7 +485,7 @@
         var n = num(c);
         if (n === null) return;
         var d = Math.abs(n - res.avg);
-        if (!best || d <= best.d + 1e-9) best = { c: c, d: d }; // ties round up
+        if (!best || d <= best.d + 1e-9) best = { c: c, d: d };
       });
       res.suggestion = best.c;
       rank = function (v) { return num(v); };
@@ -428,51 +503,34 @@
     }
     return res;
   }
-
-  function bigOrFuzzy(st) {
-    if (st.total > 0 && st.unsure * 2 >= st.total) return true;
-    var s = room.final || st.suggestion;
-    if (!s) return false;
-    if (room.deck === 'tshirt') return s === 'XL' || s === 'XXL';
-    var n = num(s);
-    return n !== null && n >= (room.deck === 'pow2' ? 16 : 13);
-  }
-  function joinNames(list) {
-    var n = list.map(function (x) { return x.name; });
-    if (n.length === 1) return n[0];
-    if (n.length === 2) return n[0] + ' and ' + n[1];
-    return n[0] + ', ' + n[1] + ' and ' + (n.length - 2) + ' more';
-  }
   function cardLabel(v) {
     if (v === '?') return 'Not sure';
-    if (v === '☕') return 'Need a break';
+    if (v === '☕') return 'Break';
     return room && room.deck === 'tshirt' ? 'Size ' + v : v + (v === '1' ? ' point' : ' points');
   }
-  function anchors(v) {
-    var out = [];
-    for (var i = hist.length - 1; i >= 0 && out.length < 2; i--) if (hist[i].estimate === v) out.push(clip(hist[i].story, 32));
-    return out;
-  }
 
-  // ---------- rendering ----------
-  var seatEls = new Map();
-  var centerSig = '', histSig = null, queueSig = null, handDeck = '', clearArmed = false, clearTimer = null;
+  // ---------- rendering: table ----------
+  var centerSig = '', handDeck = '', railSig = '';
 
   function makeSeat(pl) {
-    var el = h('div', { class: 'seat', role: 'listitem' });
-    var box = pl.isMe
-      ? h('div', { class: 'seat-btn', style: 'cursor:default' })
-      : h('button', { type: 'button', class: 'seat-btn', onclick: function () { poke(pl.peer); } });
+    var item = h('div', { role: 'listitem' });
+    var box = pl.isMe ? h('div', { class: 'seat' }) : h('button', { type: 'button', class: 'seat', onclick: function () { poke(pl.peer); } });
     var mini = h('div', { class: 'mini', 'aria-hidden': 'true' });
     var inn = h('div', { class: 'mini-in' });
     var front = h('div', { class: 'face front' });
     inn.append(h('div', { class: 'face back' }), front);
-    mini.append(h('div', { class: 'slot' }), inn);
-    var nm = h('div', { class: 'nm' }), st = h('div', { class: 'st' });
-    box.append(mini, nm, st);
-    el.append(box);
-    el._box = box; el._in = inn; el._front = front; el._name = nm; el._status = st;
-    return el;
+    var watching = h('div', { class: 'watching', html: ICON.eye });
+    var topB = h('span', { class: 'chip-badge top' });
+    var botB = h('span', { class: 'chip-badge bottom' });
+    mini.append(h('div', { class: 'slot' }), inn, watching, topB, botB);
+    var dot = h('i');
+    var nmText = h('span', { class: 't' });
+    var nm = h('div', { class: 'nm' }, dot, nmText);
+    box.append(mini, nm);
+    item.append(box);
+    item._box = box; item._in = inn; item._front = front; item._watch = watching;
+    item._top = topB; item._bot = botB; item._dot = dot; item._name = nmText;
+    return item;
   }
 
   function renderSeats(list, st) {
@@ -484,58 +542,46 @@
       keep[pl.peer] = 1;
       var el = seatEls.get(pl.peer);
       if (!el) { el = makeSeat(pl); seatEls.set(pl.peer, el); }
+      var b = el._box;
       var flip = room.revealed && !!pl.v && !room.anonymous;
       var shown = room.revealed ? !!pl.v : pl.ready;
-      el.classList.toggle('spec', pl.spec);
-      el.classList.toggle('voted', shown);
-      el.classList.toggle('away', pl.away);
-      if (flip && !el.classList.contains('flipped')) el._in.style.transitionDelay = (flipIndex * 45) + 'ms';
+      b.classList.toggle('voted', shown);
+      b.classList.toggle('off', pl.presence === 'off');
+      if (flip && !b.classList.contains('flipped')) el._in.style.transitionDelay = (flipIndex * 45) + 'ms';
       else if (!flip) el._in.style.transitionDelay = '0ms';
       if (flip) flipIndex++;
       el._front.textContent = flip ? pl.v : '';
       el._front.classList.toggle('red', flip && !!SPECIAL[pl.v]);
       el._front.setAttribute('data-len', flip ? String(len(pl.v)) : '1');
-      el.classList.toggle('flipped', flip);
-      el.classList.toggle('edge', !!(flip && (lo[pl.peer] || hi[pl.peer])));
-      el._name.textContent = pl.nick;
-      var status = pl.spec ? 'watching'
-        : !room.revealed ? (pl.ready ? 'ready' : 'thinking')
-        : !pl.v ? 'no vote'
-        : room.anonymous ? 'voted'
-        : lo[pl.peer] ? 'lowest' : hi[pl.peer] ? 'highest' : pl.away ? 'left' : '';
-      el._status.replaceChildren();
-      if (pl.isMe) el._status.append(h('span', { class: 'you' }, 'you'));
-      if (status) el._status.append(document.createTextNode(status));
-      var desc = pl.nick + (pl.isMe ? ' (you)' : '') + ': ' + (flip ? cardLabel(pl.v) + (status ? ', ' + status : '') : status);
-      el.setAttribute('aria-label', desc);
-      if (!pl.isMe) el._box.setAttribute('aria-label', 'Nudge ' + desc);
+      b.classList.toggle('flipped', flip);
+      var isLo = flip && lo[pl.peer], isHi = flip && hi[pl.peer];
+      b.classList.toggle('edge', !!(isLo || isHi));
+      el._watch.hidden = !pl.spec;
+      el._top.hidden = !(isLo || isHi);
+      if (isLo || isHi) el._top.innerHTML = isLo ? ICON.down : ICON.up;
+      el._bot.hidden = pl.presence === 'live';
+      if (pl.presence !== 'live') el._bot.innerHTML = pl.presence === 'away' ? ICON.moon : ICON.off;
+      el._dot.hidden = !pl.isMe;
+      el._name.textContent = pl.name;
+      var state = pl.spec ? 'watching' : room.revealed ? (flip ? cardLabel(pl.v) : pl.v ? 'voted' : 'no vote') : (pl.ready ? 'ready' : 'thinking');
+      var extra = [isLo ? 'lowest' : '', isHi ? 'highest' : '', pl.presence === 'away' ? 'away' : '', pl.presence === 'off' ? 'offline' : ''].filter(Boolean).join(', ');
+      var label = pl.name + (pl.isMe ? ' (you)' : '') + ': ' + state + (extra ? ', ' + extra : '');
+      b.setAttribute('aria-label', pl.isMe ? label : 'Nudge ' + label);
       order.push(el);
     });
     seatEls.forEach(function (el, k) { if (!keep[k]) { el.remove(); seatEls.delete(k); } });
     order.forEach(function (el, i) { if (wrap.children[i] !== el) wrap.insertBefore(el, wrap.children[i] || null); });
   }
 
-  function timerRow(st) {
-    if (!st || st.consensus || st.realCount < 2) return null;
-    if (room.timer_ends_at) {
-      var left = room.timer_ends_at - Date.now();
-      if (left > 0) {
-        return h('div', { class: 'timer' }, h('b', { id: 'timerTxt' }, mmss(left)), ' left to talk it through ',
-          h('button', { type: 'button', class: 'link', 'data-act': 'timer-stop', onclick: function () { rpc('start_timer', { p_seconds: 0 }).then(useRoom); } }, 'Stop'));
-      }
-      return h('div', { class: 'timer done' }, h('b', null, 'Time’s up.'), ' Settle on a number or vote again.');
-    }
-    return h('button', { type: 'button', class: 'btn secondary small', 'data-act': 'timer', onclick: function () { rpc('start_timer', { p_seconds: 120 }).then(useRoom); } }, 'Start a 2-minute timer');
-  }
-
   function renderCenter(list, st) {
-    var voters = list.filter(function (p) { return !p.spec && !p.away; });
+    var voters = list.filter(function (p) { return !p.spec && p.presence !== 'off'; });
     var ready = voters.filter(function (p) { return p.ready; });
+    var anyReady = list.some(function (p) { return p.ready; });
     var shown = list.filter(function (p) { return p.v; });
-    var timerDone = !!(room.timer_ends_at && room.timer_ends_at <= Date.now());
-    var sig = JSON.stringify([room.revealed, room.final, room.deck, room.anonymous, room.auto_reveal, room.timer_ends_at, timerDone,
-      room.story, room.story_rounds, voters.length, ready.length, votesLoaded === room.round,
-      room.revealed ? shown.map(function (p) { return [p.peer, p.v, p.nick]; }) : 0]);
+    var running = !!(room.timer_ends_at && room.timer_ends_at > Date.now());
+    var sig = JSON.stringify([room.revealed, room.final, room.deck, room.anonymous, room.auto_reveal, room.timer_ends_at, running,
+      voters.length, ready.length, anyReady, votesLoaded === room.round,
+      room.revealed ? shown.map(function (p) { return [p.peer, p.v]; }) : 0]);
     if (sig === centerSig) return;
     centerSig = sig;
     var c = $('#center');
@@ -544,98 +590,45 @@
 
     if (!room.revealed) {
       var all = ready.length > 0 && ready.length === voters.length;
-      var countTxt = voters.length ? ready.length + ' of ' + voters.length + ' voted' : 'Everyone here is watching';
-      var btn = h('button', { type: 'button', class: 'btn primary' + (all ? ' ready' : ''), 'data-act': 'reveal', onclick: reveal }, 'Reveal cards');
-      btn.disabled = ready.length === 0;
-      var hint = room.auto_reveal
-        ? (all && voters.length > 1 ? 'Everyone’s in. Flipping…' : 'Cards flip on their own once everyone’s in.')
-        : all ? 'Everyone’s in. Flip when ready.'
-        : ready.length ? 'Anyone can reveal, even if someone is still thinking.'
-        : 'Cards stay face down until someone reveals them.';
-      c.append(h('p', { class: 'count' }, countTxt), btn, h('p', { class: 'hint' }, hint));
-      if (voters.length > 1 && ready.length < voters.length && ready.length > 0) c.append(h('p', { class: 'hint' }, 'Tap someone’s seat to give them a nudge.'));
-      announce(countTxt);
+      var countTxt = voters.length ? ready.length + '/' + voters.length : '0';
+      var btn = h('button', { type: 'button', class: 'reveal' + (all ? ' ready' : ''), 'data-act': 'reveal', onclick: reveal }, svg(ICON.reveal), 'Reveal');
+      btn.disabled = !anyReady;
+      c.append(h('div', { class: 'count', 'aria-label': ready.length + ' of ' + voters.length + ' voted' }, countTxt), btn);
+      announce(ready.length + ' of ' + voters.length + ' voted');
     } else if (votesLoaded !== room.round) {
-      c.append(h('p', { class: 'count' }, 'Flipping cards…'));
+      c.append(h('div', { class: 'count' }, '…'));
     } else {
-      var verdict = room.final ? 'Agreed: ' + room.final
-        : st.realCount === 0 ? 'No estimate yet'
-        : st.realCount === 1 ? 'One vote: ' + st.suggestion
-        : st.consensus ? 'Consensus on ' + st.suggestion
-        : 'Suggested: ' + st.suggestion;
-      var parts = [];
-      if (st.avg !== null && st.realCount > 1) parts.push('Average ' + fmt(st.avg) + '.');
-      if (st.lo) parts.push('Votes ran from ' + st.lo[0].v + ' to ' + st.hi[0].v + '.');
-      if (!room.final && !st.consensus && st.realCount > 1) parts.push(room.deck === 'tshirt' ? 'The suggestion is the most picked size.' : 'The suggestion is the card nearest the average.');
-      if (st.unsure) parts.push(st.unsure + ' not sure.');
-      if (st.breaks) parts.push(st.breaks + (st.breaks === 1 ? ' person wants' : ' people want') + ' a break.');
-
-      // Did a re-vote on the same story narrow the spread?
-      if (st.lo) spreadMemo[room.round] = { story: room.story, lo: st.lo[0].v, hi: st.hi[0].v };
-      var prevSpread = room.story_rounds > 1 ? spreadMemo[room.round - 1] : null;
-      var converge = (prevSpread && prevSpread.story === room.story && prevSpread.lo)
-        ? 'Last round ran from ' + prevSpread.lo + ' to ' + prevSpread.hi + '. ' + (st.consensus ? 'Now you agree.' : st.lo ? 'This one runs from ' + st.lo[0].v + ' to ' + st.hi[0].v + '.' : '')
-        : '';
-
-      c.append(h('p', { class: 'verdict' }, verdict));
-      if (parts.length) c.append(h('p', { class: 'detail' }, parts.join(' ')));
-      if (converge) c.append(h('p', { class: 'talk' }, converge));
-      if (st.lo && !room.final) c.append(h('p', { class: 'talk' }, room.anonymous
-        ? 'Hear from someone who picked ' + st.lo[0].v + ' and someone who picked ' + st.hi[0].v + ' before you settle.'
-        : 'Hear from ' + joinNames(st.lo) + ' (' + st.lo[0].v + ') and ' + joinNames(st.hi) + ' (' + st.hi[0].v + ') before you settle.'));
-      if (bigOrFuzzy(st)) c.append(h('p', { class: 'nudge-line' }, 'This one is big or fuzzy. Stories this size tend to hide surprises, so consider splitting it before you commit.'));
-      var tr = timerRow(st);
-      if (tr) c.append(tr);
-
-      var dist = h('div', { class: 'dist', role: 'group', 'aria-label': 'Votes. Pick one to set the agreed estimate.' });
+      var value = room.final || st.suggestion || '—';
+      var card = h('div', { class: 'result-card' + (len(value) > 2 ? ' long' : ''), 'aria-label': (room.final ? 'Agreed ' : 'Suggested ') + value }, value);
+      var side = h('div', { class: 'result-side' });
+      if (st.avg !== null && st.realCount > 1) side.append(h('div', { class: 'avg' }, 'avg ' + fmt(st.avg)));
+      var dist = h('div', { class: 'dist', role: 'group', 'aria-label': 'Votes. Pick one to agree on it.' });
       st.dist.forEach(function (d) {
         var special = !!SPECIAL[d.v];
-        var b = h('button', {
-          type: 'button', class: 'dchip' + (special ? ' red' : ''), 'data-act': 'fin-' + d.v,
-          'aria-pressed': String(room.final === d.v), 'aria-label': cardLabel(d.v) + ', ' + d.n + (d.n === 1 ? ' vote' : ' votes')
-        }, h('span', { class: 'v' }, d.v), h('span', { class: 'n' }, d.n === 1 ? '1 vote' : d.n + ' votes'));
+        var b = h('button', { type: 'button', class: 'dchip' + (special ? ' red' : ''), 'data-act': 'fin-' + d.v,
+          'aria-pressed': String(room.final === d.v), 'aria-label': cardLabel(d.v) + ', ' + d.n + (d.n === 1 ? ' vote' : ' votes') },
+          d.v === '☕' ? h('b', { html: ICON.cupSmall }) : h('b', null, d.v), h('small', { 'aria-hidden': 'true' }, '•'.repeat(Math.min(d.n, 9))));
         if (special) b.disabled = true; else b.onclick = function () { setFinal(d.v); };
         dist.append(b);
       });
-      c.append(dist);
+      side.append(dist);
+      c.append(h('div', { class: 'result' }, card, side));
 
-      var sel = h('select', { 'data-act': 'other', 'aria-label': 'Agree on a different value' });
-      sel.append(h('option', { value: '' }, 'Pick a value'));
-      DECKS[room.deck].cards.forEach(function (v) {
-        if (SPECIAL[v]) return;
-        var o = h('option', { value: v }, v);
-        if (room.final === v) o.selected = true;
-        sel.append(o);
-      });
-      sel.onchange = function () { if (sel.value) rpc('set_final', { p_value: sel.value }).then(useRoom); };
-      c.append(h('label', { class: 'other' }, 'Or agree on', sel));
-      c.append(h('p', { class: 'hint' }, room.final ? 'Tap the agreed card again to clear it.'
-        : 'Tap a card to set the agreed estimate. Next story saves it' + (queue.length ? ' and brings up the next one.' : ' to the list below.')));
-      c.append(h('div', { class: 'actions' },
-        h('button', { type: 'button', class: 'btn primary', 'data-act': 'next', onclick: nextStory }, 'Next story'),
-        h('button', { type: 'button', class: 'btn secondary', 'data-act': 'again', onclick: voteAgain }, 'Vote again')
-      ));
-      announce('Cards revealed. ' + verdict);
+      var actions = h('div', { class: 'actions' });
+      if (!st.consensus && st.realCount >= 2) {
+        var tLeft = running ? room.timer_ends_at - Date.now() : 0;
+        var done = !!(room.timer_ends_at && !running);
+        actions.append(h('button', { type: 'button', class: 'btn soft timer' + (done ? ' done' : ''), 'data-act': 'timer', onclick: toggleTimer,
+          'aria-label': running ? 'Stop timer' : 'Start a 2 minute timer' }, svg(ICON.timer), h('span', { id: 'timerTxt' }, running ? mmss(tLeft) : done ? '0:00' : '2:00')));
+      }
+      actions.append(
+        h('button', { type: 'button', class: 'btn soft', 'data-act': 'again', onclick: voteAgain }, svg(ICON.again), 'Re-vote'),
+        h('button', { type: 'button', class: 'btn accent', 'data-act': 'next', onclick: nextStory }, 'Next')
+      );
+      c.append(actions);
+      announce('Cards revealed. ' + (room.final ? 'Agreed ' : 'Suggested ') + value);
     }
-    if (act) {
-      var f = c.querySelector('[data-act="' + CSS.escape(act) + '"]');
-      if (f) f.focus();
-    }
-  }
-
-  function renderUpnext() {
-    var sig = JSON.stringify([queue.length, queue[0] && queue[0].story]);
-    if (sig === queueSig) return;
-    queueSig = sig;
-    var u = $('#upnext');
-    u.replaceChildren();
-    if (queue.length) {
-      u.append(document.createTextNode('Up next: '), h('b', null, clip(queue[0].story, 48)),
-        document.createTextNode(queue.length > 1 ? ' and ' + (queue.length - 1) + ' more' : ''),
-        h('button', { type: 'button', class: 'link', onclick: openQueue }, 'Edit queue'));
-    } else {
-      u.append(h('button', { type: 'button', class: 'link', onclick: openQueue }, 'Add a list of stories'));
-    }
+    if (act) { var f = c.querySelector('[data-act="' + CSS.escape(act) + '"]'); if (f) f.focus(); }
   }
 
   function renderHand() {
@@ -644,10 +637,10 @@
       handDeck = room.deck;
       row.replaceChildren();
       DECKS[room.deck].cards.forEach(function (v) {
-        row.append(h('button', {
-          type: 'button', class: 'hcard' + (SPECIAL[v] ? ' red' : ''), 'data-v': v, 'data-len': String(len(v)),
-          'aria-label': cardLabel(v), 'aria-pressed': 'false', onclick: function () { vote(v); }
-        }, h('span', { class: 'idx tl', 'aria-hidden': 'true' }, v), h('span', { class: 'val', 'aria-hidden': 'true' }, v), h('span', { class: 'idx br', 'aria-hidden': 'true' }, v)));
+        var b = h('button', { type: 'button', class: 'hcard' + (SPECIAL[v] ? ' red' : ''), 'data-v': v, 'data-len': String(len(v)),
+          'aria-label': cardLabel(v), 'aria-pressed': 'false', onclick: function () { vote(v); } });
+        if (v === '☕') b.innerHTML = ICON.cup; else b.textContent = v;
+        row.append(b);
       });
     }
     var locked = room.revealed || me.spec;
@@ -657,78 +650,43 @@
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.disabled = locked;
     });
-    var hint;
-    if (me.spec) hint = 'You’re watching this round.';
-    else if (room.revealed) hint = 'Cards are locked. Start the next story or vote again.';
-    else if (myVote) {
-      var a = SPECIAL[myVote] ? [] : anchors(myVote);
-      hint = 'You picked ' + myVote + '. ' + (a.length ? 'Earlier stories at ' + myVote + ': ' + a.join(', ') + '.' : 'Tap it again to take it back.');
-    } else hint = 'Pick a card. No one can see it until the reveal.';
-    $('#handHint').textContent = hint;
-    $('#specBtn').textContent = me.spec ? 'Join the vote' : 'Just watch';
+    $('#watchBtn').setAttribute('aria-pressed', me.spec ? 'true' : 'false');
   }
 
-  function summaryText() {
-    var n = hist.length, pts = 0, anyNum = false, agreed = 0;
-    hist.forEach(function (x) { var v = num(x.estimate); if (v !== null) { pts += v; anyNum = true; } if (x.consensus) agreed++; });
-    var secs = hist.map(function (x) { return x.seconds; }).filter(function (s) { return typeof s === 'number'; }).sort(function (a, b) { return a - b; });
-    var lines = [(brand.orgName ? brand.orgName + ' ' : '') + brand.appName + ': ' + code];
-    lines.push(n + (n === 1 ? ' story' : ' stories') + (anyNum ? ', ' + fmt(pts) + ' points' : ''));
-    lines.push('Agreed on the first vote: ' + agreed + ' of ' + n);
-    if (secs.length) lines.push('Typical time per story: ' + dur(secs[Math.floor(secs.length / 2)]));
-    lines.push('');
-    hist.forEach(function (x) { lines.push('- ' + x.story + ': ' + x.estimate); });
-    return lines.join('\n');
-  }
-
-  function renderHistory() {
-    var sig = JSON.stringify(hist) + clearArmed;
-    if (sig === histSig) return;
-    histSig = sig;
-    var sec = $('#history');
-    var act = sec.contains(document.activeElement) ? document.activeElement.getAttribute('data-act') : null;
-    sec.replaceChildren(h('h2', null, 'Estimated stories'));
-    if (!hist.length) {
-      sec.append(h('p', { class: 'muted' }, 'When you move to the next story, the one you just estimated lands here with its number, how many rounds it took and how long.'));
-      return;
-    }
-    var pts = 0, anyNum = false, agreed = 0;
-    hist.forEach(function (x) { var v = num(x.estimate); if (v !== null) { pts += v; anyNum = true; } if (x.consensus) agreed++; });
-    var n = hist.length;
-    sec.append(h('p', { class: 'muted' }, n + (n === 1 ? ' story' : ' stories') + (anyNum ? ', ' + fmt(pts) + ' points in total' : '') +
-      '. Agreed on the first vote ' + agreed + ' of ' + n + ' times.'));
-    var ul = h('ul', { class: 'hlist' });
-    hist.forEach(function (x) {
-      var meta = [x.consensus ? 'agreed first time' : (x.rounds || 1) + ((x.rounds || 1) === 1 ? ' round' : ' rounds'), dur(x.seconds)].filter(Boolean).join(', ');
-      ul.append(h('li', null, h('span', { class: 's' }, x.story, h('span', { class: 'meta' }, meta)), h('span', { class: 'v' }, x.estimate)));
-    });
-    sec.append(ul);
-    sec.append(h('div', { class: 'hactions' },
-      h('button', { type: 'button', class: 'btn plain small', 'data-act': 'summary', onclick: function () {
-        copyText(summaryText(), 'Summary copied. Paste it into Slack or Teams.', 'Couldn’t copy here. Select the list and copy it yourself.');
-      } }, 'Copy summary'),
-      h('button', { type: 'button', class: 'btn plain small', 'data-act': 'copy', onclick: function () {
-        var tsv = 'Story\tEstimate\tRounds\tMinutes\n' + hist.map(function (x) {
-          return x.story.replace(/[\t\n]/g, ' ') + '\t' + x.estimate + '\t' + (x.rounds || 1) + '\t' + (typeof x.seconds === 'number' ? fmt(x.seconds / 60) : '');
-        }).join('\n');
-        copyText(tsv, 'Copied. Paste it into a spreadsheet or your tracker.', 'Couldn’t copy here. Select the list and copy it yourself.');
-      } }, 'Copy for spreadsheet'),
-      h('button', { type: 'button', class: 'btn plain small', 'data-act': 'clear', onclick: function () {
-        if (!clearArmed) {
-          clearArmed = true; renderHistory();
-          clearTimeout(clearTimer);
-          clearTimer = setTimeout(function () { clearArmed = false; renderHistory(); }, 3500);
-        } else {
-          clearArmed = false; clearTimeout(clearTimer);
-          rpc('clear_history').then(function (r) { if (r) { useRoom(r); toast('List cleared'); } });
-        }
-      } }, clearArmed ? 'Tap again to clear for everyone' : 'Clear list')
-    ));
-    if (act) { var f = sec.querySelector('[data-act="' + act + '"]'); if (f) f.focus(); }
+  function renderRail() {
+    var sig = JSON.stringify([queue.map(function (q) { return q.story; }).slice(0, 6), queue.length, hist.map(function (x) { return [x.story, x.estimate]; })]);
+    var badge = $('#queueBadge');
+    badge.textContent = queue.length > 99 ? '99+' : String(queue.length);
+    badge.hidden = !queue.length;
+    $('#queueBtn').setAttribute('aria-label', 'Stories' + (queue.length ? ', ' + queue.length + ' up next' : ''));
+    if (sig === railSig) return;
+    railSig = sig;
+    var rail = $('#rail');
+    rail.replaceChildren();
+    var up = h('section', { class: 'rail-card', 'aria-label': 'Up next' },
+      h('div', { class: 'rail-head' }, h('h2', null, 'Up next'),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Add stories', html: ICON.plus, onclick: function () { openStories(false); } })));
+    var ul = h('ul');
+    if (!queue.length) up.append(h('div', { class: 'empty' }, 'Nothing queued'));
+    queue.slice(0, 6).forEach(function (q) { ul.append(h('li', null, h('span', null, q.story))); });
+    if (queue.length > 6) ul.append(h('li', null, h('span', { class: 'muted' }, '+' + (queue.length - 6))));
+    up.append(ul);
+    var pts = 0;
+    hist.forEach(function (x) { var n = num(x.estimate); if (n !== null) pts += n; });
+    var done = h('section', { class: 'rail-card', 'aria-label': 'Done' },
+      h('div', { class: 'rail-head' }, h('h2', null, 'Done'),
+        hist.length ? h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Copy summary', html: ICON.copy, onclick: copySummary }) : h('span', { class: 'muted' }, '')));
+    var dl = h('ul');
+    if (!hist.length) done.append(h('div', { class: 'empty' }, 'No stories yet'));
+    hist.slice(-8).forEach(function (x) { dl.append(h('li', null, h('span', null, x.story), h('span', { class: 'est' }, x.estimate))); });
+    done.append(dl);
+    if (hist.length) done.append(h('div', { class: 'empty', style: 'padding-top:2px' }, hist.length + (hist.length === 1 ? ' story' : ' stories') + (pts ? ', ' + fmt(pts) + ' pts' : '')));
+    rail.append(up, done);
   }
 
   function render() {
     if (!onTable || !room) return;
+    $('#roomCode').textContent = code;
     var storyIn = $('#story');
     if (document.activeElement !== storyIn && storyIn.value !== room.story) storyIn.value = room.story;
     var list = seatList();
@@ -736,170 +694,550 @@
     if (!room.revealed) seenUnrevealed = room.round;
     renderSeats(list, st);
     renderCenter(list, st);
-    renderUpnext();
     renderHand();
-    renderHistory();
+    renderRail();
     maybeAutoReveal(list);
-    if (st && votesLoaded === room.round && st.consensus && st.realCount >= 2 &&
-        seenUnrevealed === room.round && confettiRound !== room.round) {
+    if (st && votesLoaded === room.round && st.consensus && st.realCount >= 2 && seenUnrevealed === room.round && confettiRound !== room.round) {
       confettiRound = room.round;
       confetti();
     }
-    if ($('#settingsDlg').open) syncTableOpts();
+    if ($('#settingsDlg').open) renderSettings();
   }
 
   setInterval(function () {
-    if (!onTable || !room || !room.timer_ends_at || !room.revealed) return;
+    if (!onTable || !room) return;
     var t = $('#timerTxt');
-    var left = room.timer_ends_at - Date.now();
-    if (left <= 0) { if (t) render(); }
-    else if (t) t.textContent = mmss(left);
+    if (room.timer_ends_at && room.revealed) {
+      var left = room.timer_ends_at - Date.now();
+      if (left <= 0 && t && t.textContent !== '0:00') { centerSig = ''; render(); }
+      else if (t && left > 0) t.textContent = mmss(left);
+    }
   }, 1000);
+  setInterval(function () { if (onTable && room && offlineSince.size) render(); }, 10000);
 
-  // ---------- settings & queue dialogs ----------
-  function openDialog(d) { if (typeof d.showModal === 'function') d.showModal(); else d.setAttribute('open', ''); }
+  // ---------- reactions tray ----------
+  function closeTray() { $('#tray').hidden = true; $('#reactBtn').setAttribute('aria-expanded', 'false'); }
+  REACTS.forEach(function (r) {
+    $('#tray').append(h('button', { type: 'button', 'aria-label': r[1], onclick: function () { react(r[0]); } }, r[0]));
+  });
+  $('#reactBtn').addEventListener('click', function () {
+    var t = $('#tray');
+    t.hidden = !t.hidden;
+    $('#reactBtn').setAttribute('aria-expanded', t.hidden ? 'false' : 'true');
+  });
+  document.addEventListener('click', function (e) {
+    if (!$('#tray').hidden && !e.target.closest('#tray') && !e.target.closest('#reactBtn')) closeTray();
+  });
 
-  function renderThemes() {
-    var wrap = $('#themeList');
+  // ---------- dialogs ----------
+  function openSheet(d) {
+    if (d.open) return;
+    if (typeof d.showModal === 'function') d.showModal(); else d.setAttribute('open', '');
+  }
+  function closeSheet(d) {
+    if (typeof d.close === 'function') d.close();
+    else if (d.hasAttribute('open')) { d.removeAttribute('open'); d.dispatchEvent(new Event('close')); }
+  }
+  document.querySelectorAll('dialog').forEach(function (d) {
+    d.addEventListener('click', function (e) { if (e.target === d) closeSheet(d); });
+    if (typeof d.showModal !== 'function') {
+      var f = d.querySelector('form[method="dialog"]');
+      if (f) f.addEventListener('submit', function (e) { e.preventDefault(); closeSheet(d); });
+    }
+  });
+
+  function deckChips(wrap, current, onPick) {
     wrap.replaceChildren();
-    Theme.themes().forEach(function (t) {
-      var input = h('input', { type: 'radio', name: 'theme', value: t.id });
-      input.checked = t.id === Theme.theme();
-      input.onchange = function () { Theme.setTheme(t.id); };
-      var sw = h('span', { class: 'sw', 'aria-hidden': 'true' });
-      t.swatch.forEach(function (c) { var i = h('i'); i.style.background = c; sw.append(i); });
-      wrap.append(h('label', { class: 'tchip' }, input, sw, t.label));
+    Object.keys(DECKS).forEach(function (k) {
+      wrap.append(h('button', { type: 'button', role: 'radio', 'aria-checked': String(k === current), onclick: function () { onPick(k); } }, DECKS[k].label));
     });
-    document.querySelectorAll('input[name="mode"]').forEach(function (r) { r.checked = r.value === Theme.mode(); });
   }
-  function syncTableOpts() {
-    $('#tableOpts').hidden = !onTable || !room;
-    $('#leaveBtn').hidden = !onTable;
-    if (!room) return;
-    $('#deckSel').value = room.deck;
-    $('#optAuto').checked = room.auto_reveal;
-    $('#optAnon').checked = room.anonymous;
+  function toggleRows(wrap, items) {
+    wrap.replaceChildren();
+    items.forEach(function (o) {
+      wrap.append(h('button', { type: 'button', class: 'toggle', role: 'switch', 'aria-checked': String(!!o.on), onclick: o.flip },
+        svg(o.icon), h('span', { class: 't' }, o.name), h('span', { class: 'switch', 'aria-hidden': 'true' })));
+    });
   }
-  function openSettings() { renderThemes(); syncTableOpts(); openDialog($('#settingsDlg')); }
 
-  function renderQueueDlg() {
-    var ul = $('#queueList');
-    ul.replaceChildren();
-    queue.forEach(function (q) {
-      ul.append(h('li', null, h('span', null, q.story),
-        h('button', { type: 'button', class: 'link', 'aria-label': 'Remove ' + q.story, onclick: function () { rpc('queue_remove', { p_id: q.id }).then(useRoom); } }, 'Remove')));
+  // settings
+  function renderSettings() {
+    var list = $('#themeList');
+    list.replaceChildren();
+    Theme.themes().forEach(function (t) {
+      var sw = h('span', { class: 'sw', 'aria-hidden': 'true' }, h('i'));
+      sw.style.background = t.table; sw.style.borderColor = t.rail;
+      var chip = sw.firstChild; chip.style.background = t.card; chip.style.boxShadow = '4px 0 0 ' + t.accent;
+      list.append(h('button', { type: 'button', class: 'swatch', role: 'radio', 'aria-checked': String(t.id === Theme.theme()),
+        onclick: function () { Theme.setTheme(t.id); renderSettings(); } }, sw, t.label));
     });
-    $('#queueCount').textContent = queue.length ? queue.length + (queue.length === 1 ? ' story waiting' : ' stories waiting') : 'Nothing queued yet';
-    $('#queueClearBtn').hidden = !queue.length;
+    document.querySelectorAll('#modeSeg button').forEach(function (b) { b.setAttribute('aria-checked', String(b.getAttribute('data-mode') === Theme.mode())); });
+    var showTable = onTable && !!room;
+    $('#tableOpts').hidden = !showTable;
+    $('#leaveBtn').hidden = !onTable;
+    if (!showTable) return;
+    deckChips($('#tableDecks'), room.deck, function (k) {
+      if (k === room.deck) return;
+      rpc('set_deck', { p_deck: k }).then(function (r) { if (r) { useRoom(r); toast('Deck changed'); } });
+    });
+    toggleRows($('#tableToggles'), [
+      { name: 'Auto-flip', icon: ICON.bolt, on: room.auto_reveal, flip: function () { rpc('set_options', { p_auto_reveal: !room.auto_reveal, p_anonymous: null }).then(useRoom); } },
+      { name: 'Hide names', icon: ICON.hide, on: room.anonymous, flip: function () { rpc('set_options', { p_auto_reveal: null, p_anonymous: !room.anonymous }).then(useRoom); } }
+    ]);
   }
-  function openQueue() { renderQueueDlg(); openDialog($('#queueDlg')); if (fine()) $('#queueInput').focus(); }
+  document.querySelectorAll('#modeSeg button').forEach(function (b) {
+    b.addEventListener('click', function () { Theme.setMode(b.getAttribute('data-mode')); renderSettings(); });
+  });
+  function openSettings() { renderSettings(); openSheet($('#settingsDlg')); }
+
+  // new game
+  function renderNew() {
+    deckChips($('#newDecks'), newOpts.deck, function (k) { newOpts.deck = k; renderNew(); });
+    toggleRows($('#newToggles'), [
+      { name: 'Auto-flip', icon: ICON.bolt, on: newOpts.auto, flip: function () { newOpts.auto = !newOpts.auto; renderNew(); } },
+      { name: 'Hide names', icon: ICON.hide, on: newOpts.anon, flip: function () { newOpts.anon = !newOpts.anon; renderNew(); } }
+    ]);
+    $('#newStoriesCount').textContent = drafts.length ? String(drafts.length) : 'Optional';
+  }
+
+  // invite
+  var qrFor = '';
+  function inviteLink() { return location.href.split('#')[0] + '#' + code; }
+  async function renderQR() {
+    var box = $('#qr');
+    var link = inviteLink();
+    if (qrFor === link) return;
+    try {
+      await loadScript(LIB_QR);
+      var qr = window.qrcode(0, 'M');
+      qr.addData(link);
+      qr.make();
+      var n = qr.getModuleCount(), d = '';
+      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) if (qr.isDark(y, x)) d += 'M' + x + ' ' + y + 'h1v1h-1z';
+      box.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + n + ' ' + n + '" shape-rendering="crispEdges" aria-hidden="true"><path fill="#0E1830" d="' + d + '"/></svg>';
+      box.hidden = false;
+      qrFor = link;
+    } catch (e) { box.hidden = true; }
+  }
+  function openInvite() {
+    $('#inviteTitle').textContent = (room && room.title) || brand.appName;
+    $('#inviteCode').textContent = code;
+    $('#copyLinkLabel').textContent = 'Copy link';
+    renderQR();
+    openSheet($('#inviteDlg'));
+  }
+  $('#copyLinkBtn').addEventListener('click', function () { copyText(inviteLink(), 'Link copied'); $('#copyLinkLabel').textContent = 'Copied'; });
+  $('#shareBtn').addEventListener('click', function () {
+    var data = { title: (room && room.title) || brand.appName, url: inviteLink() };
+    if (navigator.share) navigator.share(data).catch(function () {});
+    else copyText(data.url, 'Link copied');
+  });
+
+  // ---------- stories: import ----------
+  var HEADER_ANY = /^(issue ?key|key|id|ticket|issue id|summary|title|name|story|subject|description|issue type|status|story points?|priority|assignee)$/i;
+  var HEADER_KEY = /^(issue ?key|key|ticket|issue id|id)$/i;
+  var HEADER_TITLE = /^(summary|title|story|name|subject)$/i;
+
+  function parseDelimited(text, delim) {
+    var rows = [], row = [], cell = '', q = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += ch;
+      } else if (ch === '"' && cell === '') q = true;
+      else if (ch === delim) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  function rowsFromPaste(text) {
+    text = String(text || '').replace(/\r\n?/g, '\n');
+    if (text.indexOf('\t') >= 0) return parseDelimited(text, '\t');
+    return text.split('\n').map(function (l) { return [l]; });
+  }
+  function rowsFromCSV(text) {
+    var first = (text.split(/\r?\n/)[0] || '');
+    var counts = { ',': (first.match(/,/g) || []).length, ';': (first.match(/;/g) || []).length, '\t': (first.match(/\t/g) || []).length };
+    var delim = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+    if (!counts[delim]) return text.split(/\r?\n/).map(function (l) { return [l]; });
+    return parseDelimited(text, delim);
+  }
+
+  function buildPending(rows, source) {
+    rows = rows.map(function (r) { return r.map(function (c) { return String(c == null ? '' : c).trim(); }); })
+      .filter(function (r) { return r.some(function (c) { return c; }); });
+    if (!rows.length) { toast('Nothing to add'); return; }
+    var width = Math.max.apply(null, rows.map(function (r) { return r.length; }));
+    var first = rows[0];
+    var hasHeader = width > 1 && first.some(function (c) { return HEADER_ANY.test(c); });
+    var data = hasHeader ? rows.slice(1) : rows;
+    var cols = [];
+    for (var i = 0; i < width; i++) cols.push((hasHeader && first[i]) ? first[i] : 'Column ' + String.fromCharCode(65 + (i % 26)));
+    var keyCol = -1, titleCol = 0;
+    if (width > 1) {
+      if (hasHeader) {
+        keyCol = first.findIndex(function (c) { return HEADER_KEY.test(c); });
+        titleCol = first.findIndex(function (c, j) { return j !== keyCol && HEADER_TITLE.test(c); });
+      }
+      if (keyCol < 0) {
+        for (var k = 0; k < width; k++) {
+          var hits = data.filter(function (r) { return KEY_ONLY.test(r[k] || ''); }).length;
+          if (data.length && hits / data.length >= 0.6) { keyCol = k; break; }
+        }
+      }
+      if (titleCol < 0) {
+        var bestLen = -1;
+        for (var t = 0; t < width; t++) {
+          if (t === keyCol) continue;
+          var avg = data.reduce(function (s, r) { return s + (r[t] || '').length; }, 0) / Math.max(1, data.length);
+          if (avg > bestLen) { bestLen = avg; titleCol = t; }
+        }
+      }
+    }
+    pending = { source: source, cols: cols, data: data, keyCol: keyCol, titleCol: titleCol, picks: {} };
+    renderStories();
+  }
+
+  function existingIndex() {
+    var keys = {}, texts = {};
+    function add(s, tag) {
+      var sk = splitKey(s);
+      if (sk.key) keys[sk.key] = keys[sk.key] || tag;
+      texts[norm(s)] = texts[norm(s)] || tag;
+    }
+    hist.forEach(function (x) { add(x.story, 'done'); });
+    queue.forEach(function (q) { add(q.story, 'queued'); });
+    drafts.forEach(function (s) { add(s, 'queued'); });
+    if (room && room.story) add(room.story, 'now');
+    return { keys: keys, texts: texts };
+  }
+  function pendingItems() {
+    if (!pending) return [];
+    var ex = existingIndex(), seen = {}, out = [];
+    pending.data.forEach(function (r, i) {
+      var key = pending.keyCol >= 0 ? (r[pending.keyCol] || '').trim() : '';
+      var title = (r[pending.titleCol] || '').trim();
+      if (!key) { var sk = splitKey(title); if (sk.key) { key = sk.key; title = sk.title; } }
+      if (key && !KEY_ONLY.test(key)) { title = (key + ' ' + title).trim(); key = ''; }
+      if (!title && !key) return;
+      var story = clip(key ? key + (title ? ' ' + title : '') : title, 140);
+      var n = norm(story);
+      if (seen[n]) return;
+      seen[n] = 1;
+      var tag = (key && ex.keys[key]) || ex.texts[n] || '';
+      var on = pending.picks[i] !== undefined ? pending.picks[i] : !tag;
+      out.push({ i: i, key: key, title: title || key, story: story, tag: tag, on: on });
+    });
+    return out;
+  }
+
+  function renderStories() {
+    var dlg = $('#storiesDlg');
+    if (!dlg.open) return;
+    var pbox = $('#pendingBox');
+    var lists = $('#listsBox');
+    if (pending) {
+      pbox.hidden = false; lists.hidden = true;
+      var items = pendingItems();
+      var chips = $('#mapChips');
+      chips.replaceChildren(h('span', { class: 'info-chip' }, svg(ICON.sheet), pending.source + ', ' + items.length + (items.length === 1 ? ' row' : ' rows')));
+      if (pending.cols.length > 1) {
+        var mk = function (label, val, allowNone, onPick) {
+          var sel = h('select', { 'aria-label': label + ' column' });
+          if (allowNone) sel.append(h('option', { value: '-1' }, 'None'));
+          pending.cols.forEach(function (c, j) { var o = h('option', { value: String(j) }, clip(c, 24)); if (j === val) o.selected = true; sel.append(o); });
+          if (val < 0 && allowNone) sel.value = '-1';
+          sel.onchange = function () { onPick(Number(sel.value)); };
+          return h('label', { class: 'map-chip' }, h('span', null, label), sel);
+        };
+        chips.append(
+          mk('Key', pending.keyCol, true, function (v) { pending.keyCol = v; pending.picks = {}; renderStories(); }),
+          mk('Title', pending.titleCol, false, function (v) { pending.titleCol = v; pending.picks = {}; renderStories(); })
+        );
+      }
+      var rowsBox = $('#pendingRows');
+      rowsBox.replaceChildren();
+      items.forEach(function (it) {
+        rowsBox.append(h('button', { type: 'button', class: 'row' + (it.on ? '' : ' off'), role: 'checkbox', 'aria-checked': String(it.on),
+          onclick: function () { pending.picks[it.i] = !it.on; renderStories(); } },
+          h('span', { class: 'tick', 'aria-hidden': 'true', html: it.on ? ICON.tick : '' }),
+          it.key ? h('span', { class: 'key' }, it.key) : null,
+          h('span', { class: 't' }, it.title),
+          it.tag ? h('span', { class: 'tag' }, it.tag) : null));
+      });
+      var n = items.filter(function (x) { return x.on; }).length;
+      var addBtn = $('#addPendingBtn');
+      addBtn.textContent = n ? 'Add ' + n : 'Add';
+      addBtn.disabled = !n;
+      return;
+    }
+    pbox.hidden = true; lists.hidden = false;
+    lists.replaceChildren();
+    var upItems = storiesDraftMode ? drafts.map(function (s, i) { return { story: s, remove: function () { drafts.splice(i, 1); renderStories(); renderNew(); } }; })
+      : queue.map(function (q) { return { story: q.story, remove: function () { rpc('queue_remove', { p_id: q.id }).then(useRoom); } }; });
+    var head = h('div', { class: 'list-head' }, h('h3', null, 'Up next' + (upItems.length ? ' (' + upItems.length + ')' : '')));
+    if (upItems.length && !storiesDraftMode) head.append(h('button', { type: 'button', class: 'linkish', onclick: function () { rpc('queue_remove', { p_id: null }).then(useRoom); } }, 'Clear'));
+    lists.append(head);
+    if (!upItems.length) lists.append(h('p', { class: 'empty-note' }, 'Nothing queued'));
+    upItems.forEach(function (u) {
+      var sk = splitKey(u.story);
+      lists.append(h('div', { class: 'qitem' }, sk.key ? h('span', { class: 'key' }, sk.key) : null, h('span', { class: 't' }, sk.key ? (sk.title || sk.key) : u.story),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove ' + u.story, html: ICON.x, onclick: u.remove })));
+    });
+    if (storiesDraftMode || !hist.length) return;
+    lists.append(h('div', { style: 'height:18px' }));
+    lists.append(h('div', { class: 'list-head' }, h('h3', null, 'Done (' + hist.length + ')'),
+      h('span', { class: 'acts' },
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Copy summary', html: ICON.copy, onclick: copySummary }),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Export CSV', html: ICON.download, onclick: exportCSV }))));
+    hist.forEach(function (x) {
+      var sk = splitKey(x.story);
+      lists.append(h('div', { class: 'qitem' }, sk.key ? h('span', { class: 'key' }, sk.key) : null,
+        h('span', { class: 't' }, sk.key ? (sk.title || sk.key) : x.story), h('span', { class: 'est' }, x.estimate)));
+    });
+  }
+
+  function openStories(draft) {
+    storiesDraftMode = !!draft;
+    pending = null;
+    $('#typeStory').value = '';
+    openSheet($('#storiesDlg'));
+    renderStories();
+  }
+  async function commitStories(list) {
+    if (!list.length) return;
+    if (storiesDraftMode) {
+      list.forEach(function (s) { drafts.push(s); });
+      toast('Added ' + list.length);
+      renderNew();
+    } else {
+      var n = await queueStories(list);
+      if (n) toast('Added ' + n);
+    }
+    pending = null;
+    renderStories();
+  }
+  function readFile(file, asBuffer) {
+    if (asBuffer && typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+    if (!asBuffer && typeof file.text === 'function') return file.text();
+    return new Promise(function (res, rej) {
+      var r = new FileReader();
+      r.onload = function () { res(r.result); };
+      r.onerror = function () { rej(r.error); };
+      if (asBuffer) r.readAsArrayBuffer(file); else r.readAsText(file);
+    });
+  }
+  async function handleFile(file) {
+    if (!file) return;
+    var name = clip(file.name || 'file', 28);
+    try {
+      if (/\.xlsx?$/i.test(file.name || '')) {
+        await loadScript(LIB_XLSX);
+        var wb = window.XLSX.read(await readFile(file, true), { type: 'array' });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        buildPending(window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, blankrows: false, defval: '' }), name);
+      } else {
+        buildPending(rowsFromCSV(await readFile(file, false)), name);
+      }
+    } catch (e) { toast('Couldn’t read that file'); }
+  }
+
+  $('#typeStory').addEventListener('paste', function (e) {
+    var text = (e.clipboardData || window.clipboardData).getData('text');
+    if (/[\n\t]/.test(text.trim())) { e.preventDefault(); buildPending(rowsFromPaste(text), 'Pasted'); }
+  });
+  function addTyped() {
+    var v = clip($('#typeStory').value, 140);
+    if (!v) return;
+    $('#typeStory').value = '';
+    commitStories([v]);
+  }
+  $('#typeStory').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addTyped(); } });
+  $('#typeAddBtn').addEventListener('click', addTyped);
+  $('#pasteBtn').addEventListener('click', async function () {
+    try {
+      var text = await navigator.clipboard.readText();
+      if (!text.trim()) { toast('Clipboard is empty'); return; }
+      buildPending(rowsFromPaste(text), 'Pasted');
+    } catch (e) { $('#typeStory').focus(); toast('Press Ctrl+V or long-press to paste'); }
+  });
+  $('#fileBtn').addEventListener('click', function () { $('#fileInput').click(); });
+  $('#fileInput').addEventListener('change', function (e) { handleFile(e.target.files[0]); e.target.value = ''; });
+  (function () {
+    var body = $('#storiesBody'), tile = $('#fileBtn');
+    body.addEventListener('dragover', function (e) { e.preventDefault(); tile.classList.add('drag'); });
+    body.addEventListener('dragleave', function () { tile.classList.remove('drag'); });
+    body.addEventListener('drop', function (e) { e.preventDefault(); tile.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
+  })();
+  $('#clearPendingBtn').addEventListener('click', function () { pending = null; renderStories(); });
+  $('#addPendingBtn').addEventListener('click', function () {
+    commitStories(pendingItems().filter(function (x) { return x.on; }).map(function (x) { return x.story; }));
+  });
+
+  function summaryText() {
+    var n = hist.length, pts = 0, anyNum = false, agreed = 0;
+    hist.forEach(function (x) { var v = num(x.estimate); if (v !== null) { pts += v; anyNum = true; } if (x.consensus) agreed++; });
+    var secs = hist.map(function (x) { return x.seconds; }).filter(function (s) { return typeof s === 'number'; }).sort(function (a, b) { return a - b; });
+    var lines = [((room && room.title) || brand.appName) + ' (' + code + ')'];
+    lines.push(n + (n === 1 ? ' story' : ' stories') + (anyNum ? ', ' + fmt(pts) + ' points' : ''));
+    lines.push('Agreed on the first vote: ' + agreed + ' of ' + n);
+    if (secs.length) lines.push('Typical time per story: ' + dur(secs[Math.floor(secs.length / 2)]));
+    lines.push('');
+    hist.forEach(function (x) { lines.push('- ' + x.story + ': ' + x.estimate); });
+    return lines.join('\n');
+  }
+  function copySummary() { copyText(summaryText(), 'Summary copied'); }
+  function exportCSV() {
+    var q = function (s) { s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    var lines = ['Issue key,Summary,Story points,Rounds,Minutes'];
+    hist.forEach(function (x) {
+      var sk = splitKey(x.story);
+      lines.push([sk.key, sk.key ? sk.title : x.story, x.estimate, x.rounds || 1, typeof x.seconds === 'number' ? fmt(x.seconds / 60) : ''].map(q).join(','));
+    });
+    download(code + '-estimates.csv', lines.join('\n') + '\n', 'text/csv');
+  }
 
   // ---------- views ----------
+  function updateLogo() {
+    var dark = Theme.resolvedMode() === 'dark';
+    ['#startLogo', '#barLogo'].forEach(function (sel) {
+      var img = $(sel);
+      if (!brand.logo) { img.hidden = true; return; }
+      var src = dark && brand.logoDark ? brand.logoDark : brand.logo;
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+      img.alt = brand.logoAlt || '';
+      img.classList.toggle('plate', dark && !brand.logoDark);
+      img.onerror = function () { img.hidden = true; };
+      img.hidden = false;
+    });
+  }
   function applyBrand() {
-    document.title = brand.orgName ? brand.orgName + ' ' + brand.appName : brand.appName;
+    document.title = brand.appName;
     $('#heroTitle').textContent = brand.appName;
-    $('#markText').textContent = brand.appName;
+    $('#barTitle').textContent = brand.appName;
     updateLogo();
   }
-  function updateLogo() {
-    var img = $('#logo');
-    if (!brand.logo) { img.hidden = true; return; }
-    var dark = Theme.resolvedMode() === 'dark';
-    var src = dark && brand.logoDark ? brand.logoDark : brand.logo;
-    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
-    img.alt = brand.logoAlt || '';
-    img.classList.toggle('plate', dark && !brand.logoDark);
-    img.onerror = function () { img.hidden = true; };
-    img.hidden = false;
-  }
-
   function resetTableState() {
-    room = null; players = new Map(); online = null;
+    room = null; players = new Map(); online = null; offlineSince = new Map();
     votes = new Map(); votesRound = -1; votesLoaded = -1; hist = []; histVersion = -1;
     queue = []; queueVersion = -1; myVote = null; votePending = 0;
-    spreadMemo = {}; seenUnrevealed = -1; confettiRound = -1; clearAuto();
+    seenUnrevealed = -1; confettiRound = -1; clearAuto(); qrFor = '';
     seatEls.clear(); $('#seats').replaceChildren();
-    centerSig = ''; histSig = null; queueSig = null; handDeck = '';
+    centerSig = ''; handDeck = ''; railSig = '';
   }
   function showTable() {
     onTable = true;
-    $('#joinView').hidden = true;
+    $('#startView').hidden = true;
     $('#tableView').hidden = false;
-    $('#topbar').classList.remove('joining');
-    $('#inviteBtn').hidden = false;
   }
-  function showJoin() {
+  function showStart() {
     onTable = false;
     $('#tableView').hidden = true;
-    $('#joinView').hidden = false;
-    $('#topbar').classList.add('joining');
-    $('#inviteBtn').hidden = true;
-    $('#code').value = code || newCode();
+    $('#startView').hidden = false;
   }
-  function joinError(msg) {
-    var err = $('#nickErr');
-    err.textContent = msg;
-    err.hidden = !msg;
-  }
+  function startError(msg) { var e = $('#startErr'); e.textContent = msg || ''; e.hidden = !msg; }
 
-  async function joinTable() {
+  function needName() {
     var nick = clip($('#nick').value, 24);
-    if (!nick) { joinError('Add your name so the team knows whose card is whose.'); $('#nick').focus(); return; }
-    joinError('');
-    if (!sb) { $('#setupNote').hidden = false; return; }
-    var c = cleanCode($('#code').value);
-    if (!ROOM_RE.test(c)) c = newCode();
-    $('#code').value = c;
+    if (!nick) { startError('Add your name first'); $('#nick').focus(); return null; }
+    startError('');
+    if (!sb) { $('#setupNote').hidden = false; return null; }
     me.name = nick; me.spec = $('#spec').checked;
-    store.set('pp.nick', nick); store.set('pp.room', c); store.set('pp.spec', me.spec ? '1' : '0');
+    store.set('pp.nick', nick); store.set('pp.spec', me.spec ? '1' : '0');
+    return nick;
+  }
+  async function enterTable(roomRow, my) {
+    code = roomRow.code;
+    store.set('pp.room', code);
+    resetTableState();
+    applyRoom(roomRow);
+    showTable();
+    setConn('connecting');
+    try { window.history.replaceState(null, '', '#' + code); } catch (e) {}
+    loadPlayers(); loadMyVote();
+    subscribe(my);
+    render();
+  }
 
+  async function joinExisting(raw) {
+    if (!needName()) return;
+    var c = codeFrom(raw);
+    if (!ROOM_RE.test(c)) { startError('Check the room code'); $('#code').focus(); return; }
     var btn = $('#joinBtn');
-    btn.disabled = true; btn.textContent = 'Taking your seat…';
+    btn.disabled = true;
     var my = ++sess;
     try {
-      uid = (await ensureUser()).id;
-      var res = await sb.rpc('join_room', { p_code: c, p_name: nick, p_spectator: me.spec });
+      await ensureUser();
+      var res = await sb.rpc('join_game', { p_code: c, p_name: me.name, p_spectator: me.spec });
       if (res.error) throw res.error;
       if (my !== sess) return;
-      code = c;
-      resetTableState();
-      applyRoom(res.data);
-      showTable();
-      setConn('connecting');
-      try { window.history.replaceState(null, '', '#' + code); } catch (e) {}
-      loadPlayers(); loadMyVote();
-      subscribe(my);
-      render();
+      await enterTable(res.data, my);
     } catch (e) {
-      if (my === sess) joinError(friendly(e));
-    } finally {
-      btn.disabled = false; btn.textContent = 'Take a seat';
-    }
+      if (my === sess) startError(friendly(e));
+    } finally { btn.disabled = false; }
+  }
+
+  async function createGame() {
+    var btn = $('#startBtn');
+    btn.disabled = true; btn.textContent = 'Starting…';
+    var my = ++sess;
+    try {
+      await ensureUser();
+      var res = null;
+      for (var attempt = 0; attempt < 4; attempt++) {
+        res = await sb.rpc('create_room', { p_code: newCode(), p_name: me.name, p_spectator: me.spec, p_title: clip($('#gameName').value, 60),
+          p_deck: newOpts.deck, p_auto_reveal: newOpts.auto, p_anonymous: newOpts.anon });
+        if (!res.error || res.error.code !== '23505') break;
+      }
+      if (res.error) throw res.error;
+      if (my !== sess) return;
+      closeSheet($('#newDlg'));
+      await enterTable(res.data, my);
+      if (drafts.length) {
+        var list = drafts.slice();
+        drafts = [];
+        await queueStories(list);
+      }
+      $('#gameName').value = '';
+      openInvite();
+    } catch (e) {
+      if (my === sess) { closeSheet($('#newDlg')); startError(friendly(e)); }
+    } finally { btn.disabled = false; btn.textContent = 'Start'; }
   }
 
   function leaveTable() {
     sess++;
     clearAuto();
     if (channel) { sb.removeChannel(channel); channel = null; }
+    channelReady = false;
     setConn('idle');
-    showJoin();
+    showStart();
+    try { window.history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    $('#code').value = '';
   }
 
   // ---------- wiring ----------
-  var deckSel = $('#deckSel');
-  Object.keys(DECKS).forEach(function (k) { deckSel.append(h('option', { value: k }, DECKS[k].label)); });
-  deckSel.addEventListener('change', function () {
-    if (!room || deckSel.value === room.deck) return;
-    rpc('set_deck', { p_deck: deckSel.value }).then(function (r) {
-      if (r) { useRoom(r); toast('Deck changed for everyone. Votes were cleared.'); } else syncTableOpts();
-    });
+  $('#startForm').addEventListener('submit', function (e) { e.preventDefault(); joinExisting($('#code').value); });
+  $('#newBtn').addEventListener('click', function () { if (!needName()) return; drafts = []; renderNew(); openSheet($('#newDlg')); });
+  $('#startBtn').addEventListener('click', createGame);
+  $('#newStoriesBtn').addEventListener('click', function () { openStories(true); });
+  $('#lookBtn').addEventListener('click', openSettings);
+  $('#settingsBtn').addEventListener('click', openSettings);
+  $('#roomPill').addEventListener('click', openInvite);
+  $('#queueBtn').addEventListener('click', function () { openStories(false); });
+  $('#leaveBtn').addEventListener('click', function () { closeSheet($('#settingsDlg')); leaveTable(); });
+  $('#watchBtn').addEventListener('click', function () {
+    me.spec = !me.spec; myVote = null;
+    store.set('pp.spec', me.spec ? '1' : '0');
+    render();
+    rpc('set_spectator', { p_spectator: me.spec });
   });
-  $('#optAuto').addEventListener('change', function (e) { rpc('set_options', { p_auto_reveal: e.target.checked, p_anonymous: null }).then(useRoom); });
-  $('#optAnon').addEventListener('change', function (e) { rpc('set_options', { p_auto_reveal: null, p_anonymous: e.target.checked }).then(useRoom); });
-  document.querySelectorAll('input[name="mode"]').forEach(function (r) {
-    r.addEventListener('change', function () { if (r.checked) Theme.setMode(r.value); });
-  });
-  Theme.onChange(updateLogo);
+  $('#storiesDlg').addEventListener('close', function () { pending = null; if (storiesDraftMode) renderNew(); storiesDraftMode = false; });
 
   var storyIn = $('#story'), storyTimer = null;
   function commitStory() {
@@ -912,50 +1250,22 @@
   storyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commitStory(); storyIn.blur(); } });
   storyIn.addEventListener('blur', function () { commitStory(); render(); });
 
-  $('#queueAddBtn').addEventListener('click', function () {
-    var lines = $('#queueInput').value.split(/\r?\n/).map(function (l) { return clip(l, 140); }).filter(Boolean);
-    if (!lines.length) { toast('Paste at least one story first'); return; }
-    var batch = lines.slice(0, 50);
-    rpc('queue_add', { p_stories: batch }).then(function (r) {
-      if (!r) return;
-      useRoom(r);
-      $('#queueInput').value = '';
-      toast(lines.length > 50 ? 'Added the first 50. Paste the rest in another batch.' : 'Added ' + batch.length + (batch.length === 1 ? ' story' : ' stories'));
-    });
-  });
-  $('#queueClearBtn').addEventListener('click', function () { rpc('queue_remove', { p_id: null }).then(useRoom); });
-
-  var reacts = $('#reacts');
-  REACTS.forEach(function (r) { reacts.append(h('button', { type: 'button', 'aria-label': r[1], title: r[1], onclick: function () { react(r[0]); } }, r[0])); });
-
-  $('#specBtn').addEventListener('click', function () {
-    me.spec = !me.spec; myVote = null;
-    store.set('pp.spec', me.spec ? '1' : '0');
-    render();
-    rpc('set_spectator', { p_spectator: me.spec });
-  });
-  $('#inviteBtn').addEventListener('click', function () {
-    var link = location.href.split('#')[0] + '#' + code;
-    copyText(link, 'Invite link copied', 'Room code: ' + code);
-  });
-  $('#settingsBtn').addEventListener('click', openSettings);
-  $('#leaveBtn').addEventListener('click', function () { $('#settingsDlg').close(); leaveTable(); });
-  $('#newCodeBtn').addEventListener('click', function () { $('#code').value = newCode(); });
-  $('#joinForm').addEventListener('submit', function (e) { e.preventDefault(); joinTable(); });
   document.addEventListener('visibilitychange', function () {
+    trackMe();
     if (document.visibilityState === 'visible' && onTable && sb) resync();
   });
+  Theme.onChange(function () { updateLogo(); if ($('#settingsDlg').open) renderSettings(); });
 
-  function hashCode() {
-    var t = '';
-    try { t = cleanCode(decodeURIComponent(location.hash.slice(1))); } catch (e) {}
-    return ROOM_RE.test(t) ? t : '';
-  }
+  function hashCode() { return codeFrom(location.hash); }
   window.addEventListener('hashchange', function () { var c = hashCode(); if (c && !onTable) $('#code').value = c; });
 
   applyBrand();
   $('#nick').value = store.get('pp.nick') || '';
-  $('#code').value = hashCode() || store.get('pp.room') || newCode();
   $('#spec').checked = store.get('pp.spec') === '1';
+  var initial = hashCode();
+  if (initial) $('#code').value = initial;
   if (!sb) $('#setupNote').hidden = false;
+  else if (initial && ROOM_RE.test(initial) && $('#nick').value) joinExisting(initial);
+
+  window.__poker = { rowsFromPaste: rowsFromPaste, rowsFromCSV: rowsFromCSV, splitKey: splitKey, codeFrom: codeFrom };
 })();

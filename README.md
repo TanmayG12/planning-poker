@@ -4,33 +4,14 @@ Free, open-source planning poker for agile teams. Everyone picks a card in secre
 
 ## What it does
 
-**The basics, done properly**
-- Live tables. Join with a name and a room code, or send an invite link.
-- Votes that are actually secret. Other players' cards stay in the database until someone reveals, so they can't be read from the browser early.
-- A simultaneous card flip with consensus, a suggested estimate, the average and the spread.
-- Fibonacci, modified Fibonacci, T-shirt and powers-of-2 decks, plus "?" and a coffee-break card. Spectator mode for the Scrum Master or PM.
-
-**The parts that make estimation better**
-- **Outliers first.** After a split vote it names the lowest and highest voters and asks the table to hear from them, which is where planning poker earns its keep.
-- **Hide who voted what.** Shows the spread without names, so quieter people aren't anchored by senior voices.
-- **Split nudge.** When the estimate is big (13+, XL) or half the table picks "?", it suggests splitting the story instead of guessing.
-- **Did the re-vote help?** On a second round it compares the new spread with the last one.
-- **Your own reference stories.** Pick a card and it reminds you what the team previously estimated at that number.
-- **Story queue.** Paste a backlog, one story per line, and Next story pulls them in order.
-- **Discussion timer.** A shared 2-minute timer for when a debate starts going in circles.
-
-**The parts that make it fun**
-- Flip automatically once everyone has voted.
-- Emoji reactions and nudges: tap a teammate's seat to wiggle their cards.
-- A little confetti on a unanimous vote.
-
-**After the session**
-- A running list with each story's estimate, how many rounds it took and how long.
-- Copy a summary for Slack or Teams, or a table for a spreadsheet or Jira.
-
-**Make it yours**
-- Two built-in themes, each with light, dark and match-device modes, chosen per person.
-- Brand packs: your organization's logo, name and color themes, kept out of the public repo. See [`brand.example/`](brand.example/).
+- **New game or join.** Start a game with a name, deck and options, then share it with a link or a QR code. Joining takes a code or a pasted invite link.
+- **Secret votes.** Other players' cards stay in the database until someone reveals them, so nobody can read them early.
+- **One clean flip.** All cards turn over at once. You get the suggested or agreed estimate, the average and the spread, with the lowest and highest votes marked.
+- **Who's here.** Each seat shows whether that person is live, away in another tab or offline. Offline players don't block the count or the auto-flip.
+- **Stories in, estimates out.** Type stories, paste rows straight from Jira, Excel or Google Sheets, or drop in a CSV or Excel file. Ticket keys and title columns are detected, and duplicates are flagged. Export the results as a CSV that Jira can import.
+- **Table options.** Choose from four decks, flip cards automatically when everyone has voted, hide who voted what, run a 2-minute discussion timer, or watch without voting.
+- **A little fun.** Nudge someone by tapping their seat, send emoji reactions, and get confetti on a unanimous vote.
+- **Themes.** Navy, Crimson, Felt and Slate, each in light, dark or match-device mode, chosen per person. Optional brand packs live outside the repo (see [`brand.example/`](brand.example/)).
 
 ## How it works
 
@@ -53,7 +34,7 @@ rpc('cast_vote'), rpc('reveal_round'), …  ───▶  Postgres functions: ch
 ### 1. Supabase
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Run the files in [`supabase/migrations/`](supabase/migrations/) in order in the SQL editor, or `supabase link --project-ref <ref>` followed by `supabase db push`.
+2. Run the files in [`supabase/migrations/`](supabase/migrations/) in order (0001, 0002, 0003) in the SQL editor, or `supabase link --project-ref <ref>` followed by `supabase db push`.
 3. Under **Authentication**, then **Sign In / Providers**, turn on **Allow anonymous sign-ins**.
 4. Under **Project Settings**, then **API Keys**, copy the project URL and the `anon` key.
 
@@ -89,14 +70,14 @@ npm run deploy
 ## Project layout
 
 ```
-web/                 the app: index.html, styles.css, themes.js, app.js
+web/                 the app: index.html, styles.css, themes.js (colors), app.js
 scripts/build.mjs    copies web/ to dist/, writes config from .env, adds the brand pack
 scripts/deploy.mjs   build, then deploy dist/ to Cloudflare Pages
 supabase/            database migrations and optional cleanup
 brand.example/       template brand pack (copy to brand/)
 ```
 
-No framework and no bundler. The one runtime dependency is `@supabase/supabase-js`, loaded from a pinned CDN URL.
+No framework and no bundler. `@supabase/supabase-js` loads from a pinned CDN URL. The Excel reader (SheetJS) and the QR code generator load from pinned CDN URLs only when they're needed.
 
 ## Contributing
 

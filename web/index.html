@@ -3,146 +3,204 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#E4EAE5">
+<meta name="theme-color" content="#0B2D6B">
 <title>Planning poker</title>
 <meta name="description" content="Free, open-source planning poker. Pick cards in secret, flip them together.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Gloock&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Gloock&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script src="config.js"></script>
 <script src="themes.js"></script>
 </head>
 <body>
 
-<header class="wrap top joining" id="topbar">
-  <span class="mark"><img id="logo" alt="" hidden><span class="mark-text" id="markText">Planning poker</span></span>
-  <span class="conn" id="conn" hidden></span>
-  <button type="button" class="chip" id="inviteBtn" hidden>Copy invite link</button>
-  <button type="button" class="top-btn" id="settingsBtn">Settings</button>
-</header>
-
-<main>
-  <div class="wrap" id="joinView">
-    <form class="felt join" id="joinForm" novalidate>
-      <div class="fan" aria-hidden="true">
-        <span class="pc" style="--r:-15deg">3</span>
-        <span class="pc" style="--r:15deg">8</span>
-        <span class="pc" style="--r:0deg">5</span>
-      </div>
+<!-- Start -->
+<section class="start" id="startView" aria-label="Start">
+  <div class="start-inner">
+    <div class="start-top">
+      <img class="logo" id="startLogo" alt="" hidden>
+      <button type="button" class="icon-btn ring" id="lookBtn" aria-label="Look">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <div class="start-hero">
+      <div class="fan" aria-hidden="true"><span>3</span><span>8</span><span>5</span></div>
       <h1 id="heroTitle">Planning poker</h1>
-      <p class="lede">Everyone picks a card in secret, then you flip them together. The gap between the highest and lowest card is where the useful conversation starts.</p>
-
-      <label class="field">
-        <span>Your name</span>
-        <input type="text" id="nick" maxlength="24" autocomplete="nickname" placeholder="e.g. Priya">
+    </div>
+    <form class="start-form" id="startForm" novalidate>
+      <label class="fld">Name
+        <input class="on-card" type="text" id="nick" maxlength="24" autocomplete="nickname" placeholder="Your name">
       </label>
-      <p class="err" id="nickErr" hidden></p>
-
-      <div class="field">
-        <span><label for="code">Room code</label></span>
-        <div class="code-row">
-          <input type="text" id="code" maxlength="48" autocomplete="off" autocapitalize="none" spellcheck="false">
-          <button type="button" class="btn secondary small" id="newCodeBtn">New code</button>
-        </div>
-        <p class="help">Share the invite link or this code so your team lands at the same table.</p>
+      <p class="err" id="startErr" role="alert" hidden></p>
+      <button type="button" class="btn accent" id="newBtn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        New game
+      </button>
+      <div class="or" aria-hidden="true"><span></span>or<span></span></div>
+      <div class="join-row">
+        <label class="sr" for="code">Room code or link</label>
+        <input class="on-card" type="text" id="code" maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Room code or link">
+        <button type="submit" class="btn soft" id="joinBtn">Join</button>
       </div>
-
-      <label class="check"><input type="checkbox" id="spec"> I’m just watching, not voting</label>
-
-      <button type="submit" class="btn primary" id="joinBtn">Take a seat</button>
-      <div class="setup" id="setupNote" hidden>
-        This copy isn’t connected to a database yet. Put your Supabase URL and key in <code>.env</code> and run <code>npm run build</code>. The README walks through it.
-      </div>
+      <label class="check"><input type="checkbox" id="spec">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        Watch only
+      </label>
+      <div class="setup" id="setupNote" hidden>Not connected to a database yet. See the README.</div>
     </form>
   </div>
+</section>
 
-  <div id="tableView" hidden>
-    <div class="wrap">
-      <p class="banner" id="banner" hidden></p>
-      <section class="felt table" aria-label="Table">
-        <label class="story">
-          <span class="sr">Story being estimated</span>
-          <input type="text" id="story" maxlength="140" placeholder="What are we estimating?" autocomplete="off">
-        </label>
-        <div class="upnext" id="upnext"></div>
+<!-- Table -->
+<section class="view" id="tableView" aria-label="Table" hidden>
+  <header class="bar wrap">
+    <span class="brand"><img id="barLogo" alt="" hidden><span id="barTitle">Planning poker</span></span>
+    <button type="button" class="pill" id="roomPill" aria-label="Invite">
+      <span class="dot" id="connDot" aria-hidden="true"></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+      <span class="code" id="roomCode"></span>
+    </button>
+    <span class="grow"></span>
+    <button type="button" class="icon-btn" id="queueBtn" aria-label="Stories">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+      <span class="badge" id="queueBadge" hidden></span>
+    </button>
+    <button type="button" class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
+  </header>
+  <p class="banner wrap" id="banner" hidden></p>
+
+  <main class="layout wrap">
+    <div class="col-main">
+      <label class="story"><span class="sr">Story</span>
+        <input type="text" id="story" maxlength="140" placeholder="What are we estimating?" autocomplete="off">
+      </label>
+      <div class="table">
         <div class="seats" id="seats" role="list" aria-label="Players"></div>
         <div class="center" id="center"></div>
-      </section>
-    </div>
-
-    <div class="hand" id="hand">
-      <div class="wrap">
-        <div class="hand-row" id="handRow" role="group" aria-label="Your cards"></div>
-        <div class="hand-foot">
-          <p id="handHint"></p>
-          <div class="reacts" id="reacts" role="group" aria-label="Send a reaction to the table"></div>
-          <button type="button" class="link" id="specBtn">Just watch</button>
-        </div>
       </div>
     </div>
+    <aside class="rail" id="rail" aria-label="Stories"></aside>
+  </main>
 
-    <div class="wrap">
-      <section class="history" id="history" aria-label="Estimated stories"></section>
+  <footer class="hand wrap" id="hand">
+    <div class="tray" id="tray" role="group" aria-label="Reactions" hidden></div>
+    <button type="button" class="icon-btn" id="reactBtn" aria-label="React" aria-expanded="false">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 2 3.5 2 3.5-2 3.5-2"/><path d="M9 9.5h.01"/><path d="M15 9.5h.01"/></svg>
+    </button>
+    <div class="cards" id="handRow" role="group" aria-label="Your cards"></div>
+    <button type="button" class="icon-btn" id="watchBtn" aria-label="Watch only" aria-pressed="false">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+  </footer>
+</section>
+
+<!-- New game -->
+<dialog class="sheet" id="newDlg" aria-labelledby="newTitle">
+  <form method="dialog" class="sheet-body" id="newForm">
+    <div class="handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="newTitle">New game</h2>
+      <button type="submit" class="icon-btn" value="cancel" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
     </div>
-  </div>
-</main>
+    <label><span class="sr">Game name</span><input class="field" type="text" id="gameName" maxlength="60" placeholder="Name it, like Sprint 42" autocomplete="off"></label>
+    <div class="decks" role="radiogroup" aria-label="Deck" id="newDecks"></div>
+    <div id="newToggles"></div>
+    <button type="button" class="add-stories" id="newStoriesBtn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+      <span class="t">Add stories</span><span class="m" id="newStoriesCount">Optional</span>
+    </button>
+    <button type="button" class="btn accent" id="startBtn">Start</button>
+  </form>
+</dialog>
 
-<dialog id="settingsDlg" aria-labelledby="settingsTitle">
-  <form method="dialog" class="dlg">
-    <h2 id="settingsTitle">Settings</h2>
-    <p class="sub">Your look is saved on this device only.</p>
-
-    <h3>Theme</h3>
-    <div class="themes" id="themeList" role="radiogroup" aria-label="Theme"></div>
-
-    <h3>Light or dark</h3>
-    <div class="seg" role="radiogroup" aria-label="Light or dark">
-      <label><input type="radio" name="mode" value="light"><span>Light</span></label>
-      <label><input type="radio" name="mode" value="dark"><span>Dark</span></label>
-      <label><input type="radio" name="mode" value="auto"><span>Match device</span></label>
+<!-- Invite -->
+<dialog class="sheet invite" id="inviteDlg" aria-labelledby="inviteTitle">
+  <form method="dialog" class="sheet-body invite-body">
+    <div class="sheet-head" style="width:100%">
+      <span></span>
+      <button type="submit" class="icon-btn" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
     </div>
+    <h2 class="invite-title" id="inviteTitle">Invite</h2>
+    <div class="qr" id="qr" role="img" aria-label="QR code to join"></div>
+    <div><div class="code-label">Room code</div><div class="code-big" id="inviteCode"></div></div>
+    <div class="invite-actions">
+      <button type="button" class="btn accent" id="copyLinkBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        <span id="copyLinkLabel">Copy link</span>
+      </button>
+      <button type="button" class="btn soft" id="shareBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v13"/><path d="M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>
+        Share
+      </button>
+    </div>
+    <button type="submit" class="goto">Go to table</button>
+  </form>
+</dialog>
 
+<!-- Settings -->
+<dialog class="sheet" id="settingsDlg" aria-labelledby="settingsTitle">
+  <form method="dialog" class="sheet-body">
+    <div class="handle" aria-hidden="true"></div>
+    <h2 class="sr" id="settingsTitle">Settings</h2>
+    <div class="themes" role="radiogroup" aria-label="Theme" id="themeList"></div>
+    <div class="seg" role="radiogroup" aria-label="Light or dark" id="modeSeg">
+      <button type="button" role="radio" data-mode="light" aria-label="Light"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.9 4.9l1.4 1.4"/><path d="M17.7 17.7l1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M4.9 19.1l1.4-1.4"/><path d="M17.7 6.3l1.4-1.4"/></svg></button>
+      <button type="button" role="radio" data-mode="dark" aria-label="Dark"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <button type="button" role="radio" data-mode="auto" aria-label="Match device"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M11 18h2"/></svg></button>
+    </div>
     <div id="tableOpts" hidden>
-      <h3>This table</h3>
-      <p class="sub">These change the table for everyone in the room.</p>
-      <div class="opt-row">
-        <label for="deckSel"><b>Deck</b></label>
-        <select id="deckSel"></select>
-      </div>
-      <label class="opt">
-        <input type="checkbox" id="optAuto">
-        <span><b>Flip automatically</b><small>Cards turn over a moment after the last person votes.</small></span>
-      </label>
-      <label class="opt">
-        <input type="checkbox" id="optAnon">
-        <span><b>Hide who voted what</b><small>Shows the spread without names, so quieter voices aren’t anchored by senior ones. It’s a nudge, not a secret.</small></span>
-      </label>
+      <hr class="rule" style="margin-bottom:18px">
+      <div class="decks" role="radiogroup" aria-label="Deck" id="tableDecks"></div>
+      <div id="tableToggles" style="margin-top:8px"></div>
     </div>
-
-    <div class="dlg-foot">
-      <button type="button" class="link" id="leaveBtn" hidden>Leave table</button>
-      <button type="submit" class="btn primary small">Done</button>
+    <div class="sheet-foot">
+      <button type="button" class="linkish" id="leaveBtn" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        Leave
+      </button>
+      <span></span>
+      <button type="submit" class="btn accent small pillish">Done</button>
     </div>
   </form>
 </dialog>
 
-<dialog id="queueDlg" aria-labelledby="queueTitle">
-  <form method="dialog" class="dlg">
-    <h2 id="queueTitle">Stories up next</h2>
-    <p class="sub">Paste one story per line, straight from Jira, a spreadsheet or your notes. Next story pulls them in order.</p>
-    <label class="sr" for="queueInput">Stories to add</label>
-    <textarea id="queueInput" placeholder="PAY-142 Refund flow&#10;PAY-143 Partial refunds&#10;PAY-150 Export to CSV" style="margin-top:12px"></textarea>
-    <div class="dlg-foot" style="margin-top:10px">
-      <button type="button" class="btn primary small" id="queueAddBtn">Add to the queue</button>
-      <button type="button" class="link" id="queueClearBtn">Clear the queue</button>
+<!-- Stories -->
+<dialog class="sheet" id="storiesDlg" aria-labelledby="storiesTitle">
+  <form method="dialog" class="sheet-body" id="storiesBody">
+    <div class="handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="storiesTitle">Stories</h2>
+      <button type="submit" class="icon-btn" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
     </div>
-    <ul class="qlist" id="queueList"></ul>
-    <div class="dlg-foot">
-      <span class="sub" id="queueCount"></span>
-      <button type="submit" class="btn plain small">Done</button>
+    <div class="add-row">
+      <label class="sr" for="typeStory">Type a story</label>
+      <input class="field" type="text" id="typeStory" maxlength="140" placeholder="Type or paste stories" autocomplete="off">
+      <button type="button" class="square" id="typeAddBtn" aria-label="Add"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
     </div>
+    <div class="tiles">
+      <button type="button" class="tile" id="pasteBtn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 10h6"/><path d="M9 14h6"/></svg>
+        Paste
+      </button>
+      <button type="button" class="tile" id="fileBtn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h6"/></svg>
+        CSV or Excel
+      </button>
+      <input type="file" id="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/plain" hidden>
+    </div>
+    <div id="pendingBox" hidden>
+      <div class="chips" id="mapChips"></div>
+      <div class="rows" id="pendingRows" style="margin-top:8px"></div>
+      <div class="sheet-foot" style="margin-top:14px">
+        <button type="button" class="linkish" id="clearPendingBtn">Clear</button>
+        <button type="button" class="btn accent" id="addPendingBtn">Add</button>
+      </div>
+    </div>
+    <div id="listsBox"></div>
   </form>
 </dialog>
 

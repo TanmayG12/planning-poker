@@ -1,6 +1,5 @@
 {
   "appName": "Planning poker",
-  "orgName": "Acme",
   "logo": "logo.svg",
   "logoDark": "logo-dark.svg",
   "logoAlt": "Acme",
@@ -9,15 +8,15 @@
     "acme": {
       "label": "Acme",
       "light": {
-        "bg": "#F3F4F8", "surface": "#FFFFFF", "ink": "#141824", "muted": "#596174", "line": "#D8DCE5",
-        "felt": "#3B2C85", "felt-2": "#2E226B", "felt-ink": "#FFFFFF", "felt-muted": "#CFC8F2", "rail": "#1B1440",
+        "page": "#F3F4F8", "surface": "#FFFFFF", "ink": "#141824", "muted": "#596174", "line": "#D8DCE5",
+        "table": "#3B2C85", "table-2": "#2E226B", "table-ink": "#FFFFFF", "table-muted": "#CFC8F2", "rail": "#1B1440",
         "card": "#FFFFFF", "card-ink": "#141824", "card-red": "#C2352B",
         "accent": "#FFB020", "accent-ink": "#1B1440", "focus": "#1F6FB8",
         "toast-bg": "#141824", "toast-ink": "#FFFFFF"
       },
       "dark": {
-        "bg": "#0D0B1A", "surface": "#171428", "ink": "#ECEAF5", "muted": "#A29DBA", "line": "#2C2746",
-        "felt": "#2F2470", "felt-2": "#241B58", "felt-ink": "#FFFFFF", "felt-muted": "#C4BCEB", "rail": "#07050F",
+        "page": "#0D0B1A", "surface": "#171428", "ink": "#ECEAF5", "muted": "#A29DBA", "line": "#2C2746",
+        "table": "#2F2470", "table-2": "#241B58", "table-ink": "#FFFFFF", "table-muted": "#C4BCEB", "rail": "#07050F",
         "card": "#F5F4FA", "card-ink": "#141824", "card-red": "#C2352B",
         "accent": "#FFB020", "accent-ink": "#1B1440", "focus": "#8CC3FF",
         "toast-bg": "#ECEAF5", "toast-ink": "#0D0B1A"
