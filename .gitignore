@@ -1,0 +1,15 @@
+.DS_Store
+node_modules/
+dist/
+.wrangler/
+
+# Local only: keys and your organization's branding
+.env
+.env.*
+!.env.example
+brand/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+supabase/config.toml

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#E4EAE5">
+<title>Planning poker</title>
+<meta name="description" content="Free, open-source planning poker. Pick cards in secret, flip them together.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gloock&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script src="themes.js"></script>
+</head>
+<body>
+
+<header class="wrap top joining" id="topbar">
+  <span class="mark"><img id="logo" alt="" hidden><span class="mark-text" id="markText">Planning poker</span></span>
+  <span class="conn" id="conn" hidden></span>
+  <button type="button" class="chip" id="inviteBtn" hidden>Copy invite link</button>
+  <button type="button" class="top-btn" id="settingsBtn">Settings</button>
+</header>
+
+<main>
+  <div class="wrap" id="joinView">
+    <form class="felt join" id="joinForm" novalidate>
+      <div class="fan" aria-hidden="true">
+        <span class="pc" style="--r:-15deg">3</span>
+        <span class="pc" style="--r:15deg">8</span>
+        <span class="pc" style="--r:0deg">5</span>
+      </div>
+      <h1 id="heroTitle">Planning poker</h1>
+      <p class="lede">Everyone picks a card in secret, then you flip them together. The gap between the highest and lowest card is where the useful conversation starts.</p>
+
+      <label class="field">
+        <span>Your name</span>
+        <input type="text" id="nick" maxlength="24" autocomplete="nickname" placeholder="e.g. Priya">
+      </label>
+      <p class="err" id="nickErr" hidden></p>
+
+      <div class="field">
+        <span><label for="code">Room code</label></span>
+        <div class="code-row">
+          <input type="text" id="code" maxlength="48" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <button type="button" class="btn secondary small" id="newCodeBtn">New code</button>
+        </div>
+        <p class="help">Share the invite link or this code so your team lands at the same table.</p>
+      </div>
+
+      <label class="check"><input type="checkbox" id="spec"> I’m just watching, not voting</label>
+
+      <button type="submit" class="btn primary" id="joinBtn">Take a seat</button>
+      <div class="setup" id="setupNote" hidden>
+        This copy isn’t connected to a database yet. Put your Supabase URL and key in <code>.env</code> and run <code>npm run build</code>. The README walks through it.
+      </div>
+    </form>
+  </div>
+
+  <div id="tableView" hidden>
+    <div class="wrap">
+      <p class="banner" id="banner" hidden></p>
+      <section class="felt table" aria-label="Table">
+        <label class="story">
+          <span class="sr">Story being estimated</span>
+          <input type="text" id="story" maxlength="140" placeholder="What are we estimating?" autocomplete="off">
+        </label>
+        <div class="upnext" id="upnext"></div>
+        <div class="seats" id="seats" role="list" aria-label="Players"></div>
+        <div class="center" id="center"></div>
+      </section>
+    </div>
+
+    <div class="hand" id="hand">
+      <div class="wrap">
+        <div class="hand-row" id="handRow" role="group" aria-label="Your cards"></div>
+        <div class="hand-foot">
+          <p id="handHint"></p>
+          <div class="reacts" id="reacts" role="group" aria-label="Send a reaction to the table"></div>
+          <button type="button" class="link" id="specBtn">Just watch</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <section class="history" id="history" aria-label="Estimated stories"></section>
+    </div>
+  </div>
+</main>
+
+<dialog id="settingsDlg" aria-labelledby="settingsTitle">
+  <form method="dialog" class="dlg">
+    <h2 id="settingsTitle">Settings</h2>
+    <p class="sub">Your look is saved on this device only.</p>
+
+    <h3>Theme</h3>
+    <div class="themes" id="themeList" role="radiogroup" aria-label="Theme"></div>
+
+    <h3>Light or dark</h3>
+    <div class="seg" role="radiogroup" aria-label="Light or dark">
+      <label><input type="radio" name="mode" value="light"><span>Light</span></label>
+      <label><input type="radio" name="mode" value="dark"><span>Dark</span></label>
+      <label><input type="radio" name="mode" value="auto"><span>Match device</span></label>
+    </div>
+
+    <div id="tableOpts" hidden>
+      <h3>This table</h3>
+      <p class="sub">These change the table for everyone in the room.</p>
+      <div class="opt-row">
+        <label for="deckSel"><b>Deck</b></label>
+        <select id="deckSel"></select>
+      </div>
+      <label class="opt">
+        <input type="checkbox" id="optAuto">
+        <span><b>Flip automatically</b><small>Cards turn over a moment after the last person votes.</small></span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="optAnon">
+        <span><b>Hide who voted what</b><small>Shows the spread without names, so quieter voices aren’t anchored by senior ones. It’s a nudge, not a secret.</small></span>
+      </label>
+    </div>
+
+    <div class="dlg-foot">
+      <button type="button" class="link" id="leaveBtn" hidden>Leave table</button>
+      <button type="submit" class="btn primary small">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="queueDlg" aria-labelledby="queueTitle">
+  <form method="dialog" class="dlg">
+    <h2 id="queueTitle">Stories up next</h2>
+    <p class="sub">Paste one story per line, straight from Jira, a spreadsheet or your notes. Next story pulls them in order.</p>
+    <label class="sr" for="queueInput">Stories to add</label>
+    <textarea id="queueInput" placeholder="PAY-142 Refund flow&#10;PAY-143 Partial refunds&#10;PAY-150 Export to CSV" style="margin-top:12px"></textarea>
+    <div class="dlg-foot" style="margin-top:10px">
+      <button type="button" class="btn primary small" id="queueAddBtn">Add to the queue</button>
+      <button type="button" class="link" id="queueClearBtn">Clear the queue</button>
+    </div>
+    <ul class="qlist" id="queueList"></ul>
+    <div class="dlg-foot">
+      <span class="sub" id="queueCount"></span>
+      <button type="submit" class="btn plain small">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="sr" aria-live="polite" id="live"></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
