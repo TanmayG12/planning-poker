@@ -18,9 +18,10 @@
 
 <!-- Start -->
 <section class="start" id="startView" aria-label="Start">
-  <div class="start-inner">
+  <div class="start-inner" id="startInner">
     <div class="start-top">
       <img class="logo" id="startLogo" alt="" hidden>
+      <button type="button" class="icon-btn ring help-q" id="helpBtnStart" aria-label="How it works">?</button>
       <button type="button" class="icon-btn ring" id="lookBtn" aria-label="Look">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
       </button>
@@ -38,6 +39,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
         New game
       </button>
+      <section class="recent" id="recentBox" aria-label="Recent games" hidden></section>
       <div class="or" aria-hidden="true"><span></span>or<span></span></div>
       <div class="join-row">
         <label class="sr" for="code">Room code or link</label>
@@ -162,6 +164,10 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
         Leave
       </button>
+      <button type="button" class="linkish" id="helpBtnTable">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14"/><path d="M12 17h.01"/></svg>
+        Help
+      </button>
       <span></span>
       <button type="submit" class="btn accent small pillish">Done</button>
     </div>
@@ -201,6 +207,56 @@
       </div>
     </div>
     <div id="listsBox"></div>
+  </form>
+</dialog>
+
+<!-- Help -->
+<dialog class="sheet" id="helpDlg" aria-labelledby="helpTitle">
+  <form method="dialog" class="sheet-body">
+    <div class="handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="helpTitle">How it works</h2>
+      <button type="submit" class="icon-btn" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
+    </div>
+    <ol class="steps">
+      <li><span class="step-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>New game</li>
+      <li><span class="step-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></span>Share</li>
+      <li><span class="step-ic"><span class="step-card" aria-hidden="true">5</span></span>Pick</li>
+      <li><span class="step-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></span>Flip</li>
+    </ol>
+    <div class="legend" role="list" aria-label="What the seats mean">
+      <div role="listitem"><span class="lg lg-back" aria-hidden="true"></span>Ready</div>
+      <div role="listitem"><span class="lg lg-empty" aria-hidden="true"></span>Thinking</div>
+      <div role="listitem"><span class="lg lg-empty" aria-hidden="true"><span class="lg-badge"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span></span>Away</div>
+      <div role="listitem"><span class="lg lg-empty lg-dim" aria-hidden="true"><span class="lg-badge"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.7"/><path d="M19 12.9a10 10 0 0 0-2.1-1.4"/><path d="M12 20h.01"/></svg></span></span>Offline</div>
+      <div role="listitem"><span class="lg lg-face" aria-hidden="true">13<span class="lg-badge up"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg></span></span>Outlier</div>
+    </div>
+    <div class="faq" id="faq">
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="true" aria-controls="faq-saved">Are games saved?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-saved"><p>Yes. Rejoin any time with the code or invite link. Games you’ve played on this device show up on Start.</p></div></div>
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="false" aria-controls="faq-limits">What are the limits?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-limits" hidden><dl class="limits">
+          <dt>People per table</dt><dd>No limit, best with 3 to 15</dd>
+          <dt>Stories waiting</dt><dd>200</dd>
+        </dl></div></div>
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="false" aria-controls="faq-secret">Can anyone see my card early?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-secret" hidden><p>No. Cards stay hidden until someone taps Reveal.</p></div></div>
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="false" aria-controls="faq-stories">How do I add stories?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-stories" hidden><p>Type them, paste rows from Jira, Excel or Sheets, or upload a CSV or Excel file. Export results as a CSV that Jira can import.</p></div></div>
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="false" aria-controls="faq-who">Who can join my game?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-who" hidden><p>Anyone with the code or link. There are no accounts; your name is whatever you type.</p></div></div>
+      <div class="faq-item"><button type="button" class="faq-q" aria-expanded="false" aria-controls="faq-fork">Can I contribute or run my own?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="faq-a" id="faq-fork" hidden><p>Yes. It’s free and open source under the MIT license. Fork it, open an issue, send a pull request, or download the code and host your own copy.</p></div></div>
+    </div>
+    <section class="oss" aria-label="Open source">
+      <div><div class="oss-t">Free and open source</div><div class="oss-s">Made by Tanmay Gupta. MIT license.</div></div>
+      <div class="oss-links">
+        <a href="https://github.com/TanmayG12/planning-poker" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M14 4l-4 16"/></svg>Code</a>
+        <a href="https://github.com/TanmayG12/planning-poker/fork" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7"/><path d="M12 12v5"/></svg>Fork</a>
+        <a href="https://github.com/TanmayG12/planning-poker/archive/refs/heads/main.zip"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>Download</a>
+      </div>
+      <a class="oss-issue" href="https://github.com/TanmayG12/planning-poker/issues" target="_blank" rel="noopener"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Report a bug or suggest an idea</a>
+    </section>
   </form>
 </dialog>
 

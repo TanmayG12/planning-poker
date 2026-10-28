@@ -218,6 +218,7 @@
       votes = new Map(); votesRound = -1; votesLoaded = -1;
       if (prev) myVote = null;
     }
+    if (!prev || prev.title !== room.title) rememberGame();
     if (room.revealed && votesRound !== room.round) loadVotes();
     if (histVersion !== room.hist_version) loadHistory();
     if (queueVersion !== room.queue_version) loadQueue();
@@ -251,6 +252,7 @@
       .order('created_at', { ascending: true }).order('id', { ascending: true }).limit(500);
     if (req !== histReq || res.error) return;
     hist = res.data; histVersion = want;
+    rememberGame();
     render(); renderStories();
   }
   async function loadQueue() {
@@ -535,6 +537,7 @@
 
   function renderSeats(list, st) {
     var wrap = $('#seats');
+    wrap.classList.toggle('compact', list.length > 9);
     var lo = {}, hi = {};
     if (st && st.lo && !room.anonymous) { st.lo.forEach(function (x) { lo[x.peer] = 1; }); st.hi.forEach(function (x) { hi[x.peer] = 1; }); }
     var order = [], keep = {}, flipIndex = 0;
@@ -1102,6 +1105,72 @@
     download(code + '-estimates.csv', lines.join('\n') + '\n', 'text/csv');
   }
 
+  // ---------- recent games (kept only in this browser) ----------
+  var RECENT_KEY = 'pp.recent', RECENT_MAX = 5;
+  function readRecent() {
+    try {
+      var list = JSON.parse(store.get(RECENT_KEY) || '[]');
+      return Array.isArray(list) ? list.filter(function (g) { return g && ROOM_RE.test(g.code); }).slice(0, RECENT_MAX) : [];
+    } catch (e) { return []; }
+  }
+  function writeRecent(list) { store.set(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); }
+  function rememberGame() {
+    if (!room) return;
+    var list = readRecent().filter(function (g) { return g.code !== code; });
+    list.unshift({ code: code, title: clip(room.title || '', 60), at: Date.now(), done: hist.length });
+    writeRecent(list);
+  }
+  function forgetGame(c) { writeRecent(readRecent().filter(function (g) { return g.code !== c; })); renderRecent(); }
+  function whenText(ms) {
+    var d = new Date(ms), now = new Date();
+    var day = function (x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+    var days = Math.round((day(now) - day(d)) / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return days + ' days ago';
+    if (days < 35) return Math.floor(days / 7) + ' wk ago';
+    try { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch (e) { return d.toDateString().slice(4, 10); }
+  }
+  function renderRecent() {
+    var box = $('#recentBox');
+    var list = readRecent();
+    $('#startInner').classList.toggle('compact', list.length > 0);
+    box.hidden = !list.length;
+    box.replaceChildren();
+    if (!list.length) return;
+    box.append(h('div', { class: 'recent-head' }, h('h2', null, 'Recent'),
+      h('button', { type: 'button', onclick: function () { writeRecent([]); renderRecent(); } }, 'Clear')));
+    list.forEach(function (g) {
+      var name = g.title || g.code;
+      var when = whenText(g.at || 0);
+      var done = Number(g.done) || 0;
+      box.append(h('div', { class: 'recent-row' },
+        h('button', { type: 'button', class: 'go', 'aria-label': 'Rejoin ' + name + ', ' + done + (done === 1 ? ' story' : ' stories') + ' done, ' + when,
+          onclick: function () { $('#code').value = g.code; joinExisting(g.code); } },
+          h('span', { class: 'names' }, h('span', { class: 'n1' }, name), g.title ? h('span', { class: 'n2' }, g.code) : null),
+          h('span', { class: 'meta' }, h('span', null, when), h('b', { 'aria-hidden': 'true' }, svg(ICON.tick), String(done)))),
+        h('button', { type: 'button', class: 'x', 'aria-label': 'Forget ' + name, html: ICON.x, onclick: function () { forgetGame(g.code); } })));
+    });
+  }
+
+  // ---------- help ----------
+  function openHelp() { openSheet($('#helpDlg')); }
+  document.querySelectorAll('#faq .faq-q').forEach(function (q) {
+    q.addEventListener('click', function () {
+      var open = q.getAttribute('aria-expanded') === 'true';
+      document.querySelectorAll('#faq .faq-q').forEach(function (o) {
+        o.setAttribute('aria-expanded', 'false');
+        document.getElementById(o.getAttribute('aria-controls')).hidden = true;
+      });
+      if (!open) {
+        q.setAttribute('aria-expanded', 'true');
+        document.getElementById(q.getAttribute('aria-controls')).hidden = false;
+      }
+    });
+  });
+  $('#helpBtnStart').addEventListener('click', openHelp);
+  $('#helpBtnTable').addEventListener('click', function () { closeSheet($('#settingsDlg')); openHelp(); });
+
   // ---------- views ----------
   function updateLogo() {
     var dark = Theme.resolvedMode() === 'dark';
@@ -1136,6 +1205,7 @@
     $('#tableView').hidden = false;
   }
   function showStart() {
+    renderRecent();
     onTable = false;
     $('#tableView').hidden = true;
     $('#startView').hidden = false;
@@ -1260,6 +1330,7 @@
   window.addEventListener('hashchange', function () { var c = hashCode(); if (c && !onTable) $('#code').value = c; });
 
   applyBrand();
+  renderRecent();
   $('#nick').value = store.get('pp.nick') || '';
   $('#spec').checked = store.get('pp.spec') === '1';
   var initial = hashCode();

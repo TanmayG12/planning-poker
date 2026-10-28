@@ -1,6 +1,6 @@
 # Planning poker
 
-Free, open-source planning poker for agile teams. Everyone picks a card in secret, then you flip them together. No accounts, no ads, no per-seat pricing: a static site plus a free Supabase project.
+Free, open-source planning poker for agile teams, made by Tanmay Gupta. Everyone picks a card in secret, then you flip them together. No accounts, no ads, no per-seat pricing: a static site plus a free Supabase project.
 
 ## What it does
 
