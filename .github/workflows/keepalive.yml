@@ -1,0 +1,30 @@
+name: Check planning poker database
+
+on:
+  schedule:
+    # Supabase recommends several database requests per day on the free plan.
+    - cron: '17 2,10,18 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SUPABASE_URL: ${{ vars.POKER_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.POKER_SUPABASE_ANON_KEY }}
+    steps:
+      - name: Check the database without accessing game data
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_ANON_KEY"
+          result=$(curl --fail --silent --show-error --retry 2 --max-time 20 \
+            -X POST "$SUPABASE_URL/rest/v1/rpc/planning_poker_healthcheck" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H 'Content-Type: application/json' --data '{}')
+          test "$result" = true
+          echo 'Database check passed.'
